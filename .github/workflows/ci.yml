@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (${{ matrix.platform }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macOS]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Print toolchain info
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Cache SwiftPM build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build (debug)
+        run: swift build -v
+
+      - name: Run tests (parallel)
+        run: swift test --parallel -v
+
+  cli-smoke:
+    name: CLI smoke test
+    runs-on: macos-15
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select latest stable Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+      - name: Build CLI in release configuration
+        run: swift build -c release --product strata
+      - name: Verify CLI executes
+        run: .build/release/strata --help
+
+  lint:
+    name: Lint
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Package.swift parses
+        run: swift package describe
+      - name: Reject committed build artifacts
+        run: |
+          if [ -d .build ]; then
+            echo "::error::.build directory should not be committed"; exit 1
+          fi
