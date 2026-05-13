@@ -12,11 +12,11 @@ let package = Package(
         .visionOS(.v1)
     ],
     products: [
-        .library(name: "StrataCore",     targets: ["StrataCore"]),
-        .library(name: "StrataTesting",  targets: ["StrataTesting"]),
-        .library(name: "StrataInspect",  targets: ["StrataInspect"]),
-        .library(name: "PostsDemo",      targets: ["PostsDemo"]),
-        .executable(name: "strata",      targets: ["StrataCLI"]),
+        .library(name: "StrataCore",    targets: ["StrataCore"]),
+        .library(name: "StrataTesting", targets: ["StrataTesting"]),
+        .library(name: "StrataInspect", targets: ["StrataInspect"]),
+        .library(name: "PostsDemo",     targets: ["PostsDemo"]),
+        .executable(name: "strata",     targets: ["StrataCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -24,20 +24,17 @@ let package = Package(
     targets: [
         .target(
             name: "StrataCore",
-            path: "Sources/StrataCore",
-            swiftSettings: strictConcurrency
+            path: "Sources/StrataCore"
         ),
         .target(
             name: "StrataTesting",
             dependencies: ["StrataCore"],
-            path: "Sources/StrataTesting",
-            swiftSettings: strictConcurrency
+            path: "Sources/StrataTesting"
         ),
         .target(
             name: "StrataInspect",
             dependencies: ["StrataCore"],
-            path: "Sources/StrataInspect",
-            swiftSettings: strictConcurrency
+            path: "Sources/StrataInspect"
         ),
         .executableTarget(
             name: "StrataCLI",
@@ -46,41 +43,28 @@ let package = Package(
                 "StrataInspect",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
-            path: "Sources/StrataCLI",
-            swiftSettings: strictConcurrency
+            path: "Sources/StrataCLI"
         ),
         .target(
             name: "PostsDemo",
             dependencies: ["StrataCore"],
-            path: "Examples/PostsDemo/Sources/PostsDemo",
-            swiftSettings: strictConcurrency
+            path: "Examples/PostsDemo/Sources/PostsDemo"
         ),
         .testTarget(
             name: "StrataCoreTests",
             dependencies: ["StrataCore", "StrataTesting", "PostsDemo"],
-            path: "Tests/StrataCoreTests",
-            swiftSettings: strictConcurrency
+            path: "Tests/StrataCoreTests"
         ),
         .testTarget(
             name: "StrataTestingTests",
             dependencies: ["StrataTesting", "PostsDemo"],
-            path: "Tests/StrataTestingTests",
-            swiftSettings: strictConcurrency
+            path: "Tests/StrataTestingTests"
         ),
         .testTarget(
             name: "StrataInspectTests",
             dependencies: ["StrataInspect", "StrataTesting", "PostsDemo"],
-            path: "Tests/StrataInspectTests",
-            swiftSettings: strictConcurrency
+            path: "Tests/StrataInspectTests"
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )
-
-// Swift 6 enables strict concurrency by default — no opt-in needed.
-// `ExistentialAny` becomes default in Swift 7; opt in now so the
-// codebase is forward-compatible.
-var strictConcurrency: [SwiftSetting] {
-    [
-        .enableUpcomingFeature("ExistentialAny"),
-    ]
-}

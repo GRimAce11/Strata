@@ -1,200 +1,510 @@
-# Strata
+<h1 align="center">Strata</h1>
 
-A declarative migration toolkit for SwiftData — safe by default, testable in CI, and introspectable when things go wrong.
+<p align="center">
+  <strong>Safe, testable, introspectable SwiftData migrations.</strong><br/>
+  Declarative DSL, automatic backup &amp; rollback, fixture-based migration tests,<br/>
+  and schema diffing — everything SwiftData's <code>SchemaMigrationPlan</code> doesn't give you.
+</p>
 
-> **Status:** v0.1 — Milestone 1 complete, Milestone 2 complete, Milestone 3 scaffolded.
-> The declared-schema diff is functional; on-disk SQLite introspection has a stable protocol seam but is not yet implemented.
+<p align="center">
+  <a href="https://github.com/GRimAce11/Strata/actions/workflows/ci.yml"><img src="https://github.com/GRimAce11/Strata/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://swiftpackageindex.com/GRimAce11/Strata"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FGRimAce11%2FStrata%2Fbadge%3Ftype%3Dswift-versions" alt="Swift versions"></a>
+  <a href="https://swiftpackageindex.com/GRimAce11/Strata"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FGRimAce11%2FStrata%2Fbadge%3Ftype%3Dplatforms" alt="Platforms"></a>
+  <a href="https://github.com/GRimAce11/Strata/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GRimAce11/Strata" alt="License"></a>
+</p>
 
-## Why
+---
 
-SwiftData ships with `SchemaMigrationPlan`, a sparse API that expects you to hand-write `willMigrate` and `didMigrate` closures and figure out the lifecycle constraints yourself. In practice this means:
+## What is Strata?
 
-- Renamed properties silently drop their data unless you carefully use `originalName`.
-- Migrations are hard to test in isolation — you cannot easily fixture a v1 store, run the migration, and assert v2 invariants.
-- There is no built-in backup or rollback if a migration fails partway.
-- Schema drift between your `@Model` types and what is actually on disk is invisible.
-
-Strata addresses these by providing a declarative DSL for migrations, a `SafeModelContainer` wrapper that backs up the store and rolls back on failure, a test harness with snapshot assertions, and a schema-diff tool.
-
-## Install
-
-```swift
-// Package.swift
-.package(url: "https://github.com/GRimAce11/Strata.git", from: "0.1.0"),
-
-// Target dependencies
-.product(name: "StrataCore",    package: "Strata"),  // production code
-.product(name: "StrataTesting", package: "Strata"),  // test target only
-.product(name: "StrataInspect", package: "Strata"),  // tooling / diagnostics
-```
-
-Strata requires iOS 17 / macOS 14 / Swift 6.
-
-## Quickstart — the Posts example
-
-The package ships a real migration chain (`Examples/PostsDemo`) exercising every primitive. The short version:
+Strata is an open-source, MIT-licensed migration toolkit for SwiftData. It replaces the ceremony of hand-writing `willMigrate`/`didMigrate` closures with a declarative DSL, adds automatic store backup and rollback so a failing migration never corrupts user data, and ships a test harness that lets you fixture a v1 store, migrate it, and assert v2 invariants — all in a regular `XCTestCase`.
 
 ```swift
-import StrataCore
-import SwiftData
+let plan = MigrationPlan(schemas: [SchemaV1.self, SchemaV2.self, SchemaV3.self]) {
+    Stage(from: SchemaV1.self, to: SchemaV2.self)   // lightweight — SwiftData handles it
 
-let plan = MigrationPlan(schemas: [
-    PostsSchemaV1.self, PostsSchemaV2.self, PostsSchemaV3.self, PostsSchemaV4.self,
-]) {
-    // Lightweight migration — SwiftData handles it, no user code runs.
-    Stage(from: PostsSchemaV1.self, to: PostsSchemaV2.self)
-
-    // Custom migration with a rename.
-    Stage(from: PostsSchemaV2.self, to: PostsSchemaV3.self) {
-        Rename(\PostsSchemaV2.Post.body, to: \PostsSchemaV3.Post.content)
-
-        CustomOperation("Attach default author") { context in
-            for post in try context.fetch(FetchDescriptor<PostsSchemaV3.Post>()) where post.author == nil {
-                let a = PostsSchemaV3.Author(id: UUID().uuidString, name: "Unknown")
-                context.insert(a)
-                post.author = a
-            }
-        }
-    }
-
-    // Backfill new non-optional fields, then assert uniqueness.
-    Stage(from: PostsSchemaV3.self, to: PostsSchemaV4.self) {
-        Backfill(\PostsSchemaV4.Post.publishedAt) { $0.createdAt }
-        Backfill(\PostsSchemaV4.Post.slug)        { PostsSlug.slugify($0.title) + "-" + $0.id.prefix(6) }
-        Assert.unique(\PostsSchemaV4.Post.slug)
+    Stage(from: SchemaV2.self, to: SchemaV3.self) {
+        Rename(\PostV2.body, to: \PostV3.content)
+        Backfill(\PostV3.slug) { post in slugify(post.title) + "-" + post.id.prefix(6) }
+        Assert.unique(\PostV3.slug)
     }
 }
 
 let container = try await SafeModelContainer.make(
-    for: Schema(versionedSchema: PostsSchemaV4.self),
+    for: Schema(versionedSchema: SchemaV3.self),
     plan: plan,
-    storeURL: URL.applicationSupportDirectory.appending(path: "posts.store"),
+    storeURL: .applicationSupportDirectory.appending(path: "app.store"),
     safety: .backupAndRollback
 )
 ```
 
-## Operations
+## Why Strata?
 
-| Operation | Purpose |
-|---|---|
-| `Stage(from:to:)` (no body) | Lightweight migration — SwiftData's default heuristics |
-| `Rename(\From.x, to: \To.y)` | Move a value across a property-name change |
-| `Backfill(\.x) { ... }` | Populate a new property from existing data |
-| `Transform(from:to:capture:build:)` | Rebuild entities of one type into another |
-| `DeleteAll(M.self)` | Remove every row of a model |
-| `DeleteWhere(M.self) { ... }` | Remove rows matching a predicate |
-| `CustomOperation("...") { ... }` | Escape hatch for arbitrary logic |
-| `Assert.noNulls(\.x)` | Post-condition: no nil values |
-| `Assert.unique(\.x)` | Post-condition: distinct values |
-| `Assert.count(of:satisfies:)` | Post-condition: count matches predicate |
-| `Assert.custom("name") { ... }` | Free-form boolean post-condition |
+| | Strata | Raw `SchemaMigrationPlan` |
+|---|:-:|:-:|
+| Declarative DSL | ✅ | ❌ |
+| Rename without data loss | ✅ | ❌ (silent drop) |
+| Automatic store backup | ✅ | ❌ |
+| Rollback on failure | ✅ | ❌ |
+| Post-condition assertions | ✅ | ❌ |
+| Fixture-based migration tests | ✅ | ❌ |
+| Snapshot diff assertions | ✅ | ❌ |
+| Declared-schema diff | ✅ | ❌ |
+| Structured error reporting | ✅ | ❌ |
+| Swift 6 strict concurrency | ✅ | ✅ |
+| Zero third-party dependencies (core) | ✅ | ✅ |
 
-Operations are sorted internally by phase before execution: captures (`Rename`'s `willMigrate` side) run first, then the body, then assertions — so you can list them in whatever order reads best.
+## Requirements
 
-## Testing migrations
+| Swift | iOS | macOS | tvOS | watchOS | visionOS |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| 6.0+ | 17+ | 14+ | 17+ | 10+ | 1.0+ |
 
-`StrataTesting` plugs in to XCTest with a mix-in protocol:
+## Installation
+
+### Swift Package Manager
+
+Add Strata to your `Package.swift`:
 
 ```swift
-final class PostsMigrationTests: XCTestCase, MigrationTestCase {
-    func test_V2_to_V3_rename_preserves_body() async throws {
-        let v2Store = try fixture(schema: PostsSchemaV2.self) { ctx in
-            ctx.insert(PostsSchemaV2.Post(id: "p1", title: "T", body: "preserve me",
-                                          createdAt: .now, authorName: nil))
+dependencies: [
+    .package(url: "https://github.com/GRimAce11/Strata", from: "0.1.0"),
+],
+targets: [
+    .target(name: "MyApp",      dependencies: ["StrataCore"]),
+    .testTarget(name: "MyTests", dependencies: ["StrataCore", "StrataTesting"]),
+]
+```
+
+Or in Xcode: **File → Add Package Dependencies…** and paste
+`https://github.com/GRimAce11/Strata`.
+
+**Products**
+
+| Product | Link against | Use for |
+|---|---|---|
+| `StrataCore` | App target | Migration plans, `SafeModelContainer`, operations |
+| `StrataTesting` | Test target only | `MigrationTestCase`, fixture helpers, snapshot assertions |
+| `StrataInspect` | App / tool target | `SchemaDiff`, `MigrationReport`, CLI integration |
+
+## Quick start — Posts app, v1 → v4
+
+The package ships a complete reference migration (`Examples/PostsDemo`) that
+covers every primitive. Here is the abbreviated walkthrough.
+
+### 1. Declare your schema versions
+
+```swift
+// v1 — initial release
+enum SchemaV1: VersionedSchema {
+    static let versionIdentifier = Schema.Version(1, 0, 0)
+    static let models: [any PersistentModel.Type] = [Post.self]
+
+    @Model final class Post {
+        @Attribute(.unique) var id: String
+        var title: String
+        var body: String          // will be renamed to `content` in v3
+        var createdAt: Date
+    }
+}
+
+// v2 — add optional authorName (lightweight, no custom code needed)
+// v3 — rename body → content, introduce Author relationship
+// v4 — add non-optional publishedAt: Date and slug: String
+```
+
+### 2. Write the migration plan
+
+```swift
+import StrataCore
+
+enum PostsMigrationPlan {
+    static let plan = MigrationPlan(schemas: [
+        SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self,
+    ]) {
+        // Lightweight — SwiftData adds the optional column, nothing else needed.
+        Stage(from: SchemaV1.self, to: SchemaV2.self)
+
+        // Custom — preserve body value across the rename, attach authors.
+        Stage(from: SchemaV2.self, to: SchemaV3.self) {
+            Rename(\PostV2.body, to: \PostV3.content)
+
+            CustomOperation("Attach default Author to every post") { context in
+                for post in try context.fetch(FetchDescriptor<PostV3>()) where post.author == nil {
+                    let author = Author(id: UUID().uuidString, name: "Unknown")
+                    context.insert(author)
+                    post.author = author
+                }
+            }
         }
-        let container = try await migrate(store: v2Store, to: PostsSchemaV3.self, plan: PostsMigrationPlan.plan)
-        let posts = try ModelContext(container).fetch(FetchDescriptor<PostsSchemaV3.Post>())
-        XCTAssertEqual(posts.first?.content, "preserve me")
+
+        // Custom — backfill new non-optional fields, assert uniqueness.
+        Stage(from: SchemaV3.self, to: SchemaV4.self) {
+            Backfill(\PostV4.publishedAt) { $0.createdAt }
+            Backfill(\PostV4.slug)        { slugify($0.title) + "-" + $0.id.prefix(6) }
+            Assert.unique(\PostV4.slug)
+        }
     }
 }
 ```
 
-Snapshot assertions are also available:
+### 3. Replace your `ModelContainer` initialiser
 
 ```swift
-try await assertMigrationSnapshot(
-    fixture: v1Store, through: PostsSchemaV4.self,
+// Before
+let container = try ModelContainer(for: ..., migrationPlan: ...)
+
+// After — automatic backup, rollback on failure, pre/post hooks
+let container = try await SafeModelContainer.make(
+    for: Schema(versionedSchema: SchemaV4.self),
     plan: PostsMigrationPlan.plan,
-    matches: "v1_to_v4.json"
+    storeURL: URL.applicationSupportDirectory.appending(path: "posts.store"),
+    safety: .backupAndRollback   // .none / .backupOnly also available
 )
 ```
 
-On the first run the snapshot is recorded; subsequent runs compare against the recorded bytes.
+On failure Strata restores the store from the backup and throws
+`MigrationError.migrationFailed(underlying:backupAvailableAt:)` — the app
+starts again from a known-good state.
+
+## Operations
+
+| Operation | Phase | Purpose |
+|---|---|---|
+| `Stage(from:to:)` | — | Lightweight migration; no body |
+| `Rename(\From.x, to: \To.y)` | Capture + Body | Preserve a value across a property-name change |
+| `Backfill(\.x) { ... }` | Body | Populate a new property from existing data |
+| `Transform(from:to:capture:build:)` | Capture + Body | Rebuild entities of one type into another |
+| `DeleteAll(M.self)` | Body | Remove every row of a model |
+| `DeleteWhere(M.self) { ... }` | Body | Remove rows matching a predicate |
+| `CustomOperation("...") { ... }` | Body | Escape hatch for arbitrary `ModelContext` work |
+| `Assert.noNulls(\.x)` | Assertion | Post-condition: no nil values |
+| `Assert.unique(\.x)` | Assertion | Post-condition: all values distinct |
+| `Assert.count(of:satisfies:)` | Assertion | Post-condition: row count matches predicate |
+| `Assert.custom("...") { ... }` | Assertion | Free-form boolean post-condition |
+
+Operations execute in phase order — captures first, then body, then assertions —
+regardless of the order you list them in the stage body. This means `Rename`
+always captures before any `Backfill` runs, and assertions always see the fully
+written state.
+
+### `Rename` — safe renames without `originalName:`
+
+SwiftData's default behavior for renamed properties is to silently drop the
+source column and add a new empty one. `Rename` works around this:
+
+1. **willMigrate** — fetches all source entities, stashes each value keyed by a
+   stable string derived from the row's URI (`entityName/primaryKey`).
+2. **didMigrate** — fetches all destination entities, looks each up in the stash,
+   and writes the preserved value onto the new property.
+
+```swift
+Rename(\PostV2.body, to: \PostV3.content)
+// "Renamed payload" in PostV2.body is now in PostV3.content — not lost.
+```
+
+### `Backfill` — fill new properties
+
+```swift
+// Non-optional Date — requires a default at the property level in the schema
+// (see "Known limitations"), then Backfill overwrites it.
+Backfill(\PostV4.publishedAt) { post in post.createdAt }
+
+// Computed slug
+Backfill(\PostV4.slug) { post in slugify(post.title) + "-" + post.id.prefix(6) }
+
+// Only fill rows that don't already have a value
+Backfill(\PostV4.tagline, overwrite: false) { _ in "Draft" }
+```
+
+### `Transform` — rebuild across types
+
+Use when neither `Rename` nor `Backfill` is enough, e.g. denormalising one
+entity into two, or inverting a relationship. Provide an explicit `Snapshot`
+type to bridge the two migration phases:
+
+```swift
+struct PostSnapshot: Sendable {
+    let title: String
+    let authorName: String?
+    let createdAt: Date
+}
+
+Transform(
+    from: PostV2.self,
+    to: PostV3.self,
+    capture: { old in PostSnapshot(title: old.title, authorName: old.authorName, createdAt: old.date) },
+    build: { context, snap in
+        let author = Author(id: UUID().uuidString, name: snap.authorName ?? "Unknown")
+        context.insert(author)
+        let post = PostV3(title: snap.title, content: "", createdAt: snap.createdAt, author: author)
+        context.insert(post)
+    }
+)
+```
+
+### `Assert` — post-condition checks
+
+Assertions run after all body operations. If one throws, the migration fails and
+(with `safety: .backupAndRollback`) the store is restored.
+
+```swift
+Assert.noNulls(\PostV4.slug)               // zero nil slugs
+Assert.unique(\PostV4.slug)                // no duplicate slugs
+Assert.count(of: PostV4.self) { $0 > 0 }  // at least one post survived
+Assert.custom("authors linked") { ctx in
+    try ctx.fetch(FetchDescriptor<PostV4>()).allSatisfy { $0.author != nil }
+}
+```
+
+### Pre / post hooks
+
+Run arbitrary code before migration begins or after it succeeds:
+
+```swift
+MigrationPlan(
+    schemas: [...],
+    preMigration:  { ctx in analytics.track("migration_started", version: ctx.sourceVersion) },
+    postMigration: { ctx in analytics.track("migration_done",    version: ctx.destinationVersion) }
+) { ... }
+```
+
+## Safety layer
+
+`SafeModelContainer.make` lifecycle with `safety: .backupAndRollback`:
+
+1. **Validate** the plan structurally (schemas listed, stages adjacent).
+2. **Back up** the `.store` file and its `-wal`/`-shm` companions to
+   `.strata-backups/backup-<timestamp>/` next to the store.
+3. Run `preMigration` hook.
+4. **Migrate** via SwiftData (operations execute inside `didMigrate`).
+5. Run `postMigration` hook.
+6. **Prune** backups older than 7 days.
+7. On any error: **restore** from backup, throw
+   `MigrationError.migrationFailed(underlying:backupAvailableAt:)`.
+
+### Dry run
+
+Test whether a migration will succeed against the current user's real store
+without touching it:
+
+```swift
+let result = await SafeModelContainer.dryRun(
+    for: Schema(versionedSchema: SchemaV4.self),
+    plan: MyMigrationPlan.plan,
+    storeURL: liveStoreURL
+)
+switch result {
+case .success:         print("safe to migrate")
+case .failure(let e): print("would fail: \(e)")
+}
+```
+
+## Testing migrations
+
+`StrataTesting` plugs into `XCTestCase` via a mix-in protocol — no subclass required:
+
+```swift
+import XCTest
+import StrataCore
+import StrataTesting
+
+final class PostsMigrationTests: XCTestCase, MigrationTestCase {
+
+    func test_rename_preserves_body_as_content() async throws {
+        // 1. Build an isolated source store with real data
+        let store = try fixture(schema: SchemaV2.self) { ctx in
+            ctx.insert(PostV2(id: "p1", title: "Hello", body: "Rename me", createdAt: .now))
+        }
+
+        // 2. Run the migration
+        let container = try await migrate(store: store, to: SchemaV3.self, plan: MyPlan.plan)
+
+        // 3. Assert
+        let posts = try ModelContext(container).fetch(FetchDescriptor<PostV3>())
+        XCTAssertEqual(posts.first?.content, "Rename me")
+    }
+
+    func test_backfill_sets_publishedAt_from_createdAt() async throws {
+        let created = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = try fixture(schema: SchemaV3.self) { ctx in
+            ctx.insert(PostV3(id: "p1", title: "T", content: "C", createdAt: created))
+        }
+
+        let container = try await migrate(store: store, to: SchemaV4.self, plan: MyPlan.plan)
+        let post = try ModelContext(container).fetch(FetchDescriptor<PostV4>()).first!
+        XCTAssertEqual(post.publishedAt, created)
+    }
+
+    func test_full_chain_V1_to_V4() async throws {
+        let store = try fixture(schema: SchemaV1.self) { ctx in
+            ctx.insert(PostV1(id: "p1", title: "Sample", body: "Body", createdAt: .now))
+        }
+        let container = try await migrate(store: store, through: SchemaV4.self, plan: MyPlan.plan)
+        let posts = try ModelContext(container).fetch(FetchDescriptor<PostV4>())
+        XCTAssertEqual(posts.count, 1)
+        XCTAssertEqual(posts.first?.content, "Body")
+        XCTAssertFalse(posts.first?.slug.isEmpty ?? true)
+    }
+}
+```
+
+### Snapshot assertions
+
+On the first run the current store state is recorded to a JSON file; subsequent
+runs compare against the recorded bytes:
+
+```swift
+try await assertMigrationSnapshot(
+    fixture: v1Store,
+    through: SchemaV4.self,
+    plan: MyPlan.plan,
+    matches: "v1_to_v4.json"      // written to __Snapshots__/ next to this file
+)
+```
+
+The JSON is sorted and pretty-printed so diffs are reviewable in code review.
+
+### Performance
+
+```swift
+func test_migrate_10k_posts_in_under_two_seconds() async throws {
+    let store = try seed(schema: SchemaV3.self, count: 10_000) { i, ctx in
+        PostV3(id: "p\(i)", title: "Post \(i)", content: "Body", createdAt: .now)
+    }
+    let (duration, _) = try await benchmarkMigration(store: store, to: SchemaV4.self, plan: MyPlan.plan)
+    XCTAssertLessThan(duration, .seconds(2))
+}
+```
 
 ## Schema diffing
 
-`StrataInspect` provides a structural diff between two `VersionedSchema` types:
+`StrataInspect` compares two `VersionedSchema` types structurally:
 
 ```swift
 import StrataInspect
 
-let diff = SchemaDiff.diff(from: PostsSchemaV2.self, to: PostsSchemaV3.self)
+let diff = SchemaDiff.diff(from: SchemaV2.self, to: SchemaV3.self)
 print(MigrationReport.render(diff))
-// → Schema diff: PostsSchemaV2 → PostsSchemaV3
-//   ──────────────────────────────────────────────────
-//     + model Author
-//     + Post.content: String
-//     - Post.body
-//     + Post.author (relationship)
-//     - Post.authorName
 ```
 
-Strata does **not** infer renames — they always appear as a remove + add. That is a design choice: heuristic rename inference produces false positives (renaming `name → displayName` looks identical to deleting `name` and adding `displayName`), and a destructive false positive is much worse than a slightly noisier diff.
+```
+Schema diff: SchemaV2 → SchemaV3
+──────────────────────────────────────────────────
+  + model Author
+  + Post.content: String
+  - Post.body
+  + Post.author (relationship)
+  - Post.authorName
+```
 
-## How safety works
+Strata **never infers renames** — a property going from `body` to `content`
+always shows as a removal plus an addition. Heuristic rename inference produces
+destructive false positives; in Strata renames are always user-declared via
+`Rename(\.old, to: \.new)`.
 
-`SafeModelContainer.make(...)` with `safety: .backupAndRollback` (the default):
+### `strata` CLI
 
-1. Validates the plan structurally (every stage's schemas declared; stages adjacent).
-2. Copies the store (and `-wal`/`-shm` companions) into a sibling `.strata-backups/backup-<timestamp>/` directory.
-3. Runs your pre-migration hook, if any.
-4. Hands the plan to SwiftData via a static bridge type that conforms to `SchemaMigrationPlan`.
-5. Runs your post-migration hook, if any.
-6. On success: prunes backup directories older than seven days. On failure: restores the store from the backup and throws `MigrationError.migrationFailed(underlying:backupAvailableAt:)`.
+```bash
+# Report tables and columns in an on-disk store (Milestone 3)
+strata inspect MyApp.store
 
-The static bridge (`_StrataAppleBridge`) holds the lock for the entire `ModelContainer` initialization, so concurrent calls serialise rather than corrupting each other's slot.
+# Schema drift between declared and on-disk (Milestone 3)
+strata drift MyApp.store
+```
 
 ## Architecture
 
 ```
 StrataCore        — DSL types, operations, SafeModelContainer, backup/rollback
 StrataTesting     — MigrationTestCase, fixture/migrate helpers, snapshot assertions
-StrataInspect     — SchemaDiff, MigrationReport, StoreIntrospector (scaffolded)
-StrataCLI         — `strata` binary; inspect / diff / drift subcommands
+StrataInspect     — SchemaDiff, MigrationReport, StoreIntrospector (M3 scaffolded)
+StrataCLI         — strata binary; inspect / diff / drift subcommands
 ```
 
-Module boundaries are strict: `StrataCore` has no internal dependency on `StrataTesting` or `StrataInspect`, so they can be vended separately.
+Module boundaries are strict: `StrataCore` has no dependency on `StrataTesting`
+or `StrataInspect` — they can be vended separately and you can use `StrataCore`
+alone if you don't need test helpers or inspection tooling.
 
-### The `Rename` mechanism
+```
+MigrationPlan
+    └── Stage[]
+          └── MigrationOperation[] (phase-ordered: captures → body → assertions)
+                 ├── Rename     — stash in willMigrate, restore in didMigrate
+                 ├── Backfill   — write in didMigrate
+                 ├── Transform  — capture snapshot in willMigrate, build in didMigrate
+                 ├── Delete*    — remove in didMigrate
+                 ├── Custom     — user closure in willMigrate and/or didMigrate
+                 └── Assert.*   — check in didMigrate after all body ops
+```
 
-A common Strata gotcha: SwiftData's lightweight migration drops a "renamed" property unless you add an `originalName:` hint. Strata's `Rename` works around this by:
-
-1. **willMigrate** — fetches every entity of the source type and captures the source property's value into a stash, keyed by a stable string derived from the model's `PersistentIdentifier` (the entity name + the URI tail of the underlying `NSManagedObjectID`).
-2. **didMigrate** — fetches every entity of the destination type, computes the same stable key, looks the value up in the stash, and writes it onto the destination property.
-
-We do not use `PersistentIdentifier` directly as the dictionary key because the identifier value carries schema-version metadata that gets reissued across the migration boundary — equal underlying ObjectIDs do not always produce equal identifiers.
+The bridge to SwiftData's static `SchemaMigrationPlan` protocol lives in
+`_StrataAppleBridge` — a thread-safe global slot that holds the runtime stages
+for the duration of a single `ModelContainer` initialisation. Concurrent
+migrations serialise through the bridge's lock.
 
 ## Known limitations
 
-1. **Non-optional new columns need defaults.** SwiftData's migration validates the destination schema *before* `didMigrate` runs. A new non-optional property without a default value will fail validation regardless of any `Backfill` you have written. Declare the new column with a default (`var publishedAt: Date = .distantPast`), then have `Backfill` overwrite it with the real value.
-2. **`Transform`** requires an explicit `Snapshot` type because source and destination model types cannot coexist in a single `ModelContext`.
-3. **Rename inference** is not provided — explicit only.
-4. **CloudKit-synced stores** have their own migration semantics; Strata does not yet handle them.
-5. **`StoreIntrospector`** has a stable protocol seam but no sqlite backend yet.
+**Non-optional new columns need a default value at the property level.**
+SwiftData validates the destination schema before `didMigrate` runs, so
+`Backfill` has not yet had a chance to execute. Add a property-level default
+(`var publishedAt: Date = .distantPast`) and let `Backfill` overwrite it with
+the real per-row value. This is a SwiftData constraint — Strata cannot work
+around it from outside the `@Model` declaration.
 
-## Milestone status
+**`Transform` requires an explicit `Snapshot` type.** Source and destination
+model types cannot coexist in a single `ModelContext`; a Sendable intermediate
+value bridges the two phases.
 
-| Milestone | Status |
-|---|---|
-| 1 — Core DSL + safety layer | ✅ Complete |
-| 2 — Migration testing infrastructure | ✅ Complete |
-| 3 — Schema diff + sqlite introspection + CLI | 🟡 Declared-schema diff complete; on-disk introspection scaffolded only |
+**Rename inference is not provided.** Strata never guesses that `body →
+content` is a rename. Write `Rename(\.body, to: \.content)` explicitly — it
+is one line.
+
+**CloudKit-synced stores** have their own migration semantics. Strata does not
+yet handle them; using `safety: .backupAndRollback` with a CloudKit-enabled
+configuration is untested.
+
+**`StoreIntrospector` is scaffolded.** The SQLite backend for reading on-disk
+schema and drift detection is not yet implemented. Calls throw `Unimplemented`
+today with a clear message.
+
+## Roadmap
+
+- [x] Declarative `MigrationPlan` / `Stage` DSL with result builders
+- [x] `Rename` — stash-and-restore across the migration boundary
+- [x] `Backfill` — populate new properties from existing data
+- [x] `Transform` — explicit snapshot-based entity rebuild
+- [x] `DeleteAll` / `DeleteWhere`
+- [x] `CustomOperation` — arbitrary `ModelContext` escape hatch
+- [x] `Assert.{noNulls, unique, count, custom}` — post-condition checks
+- [x] `SafeModelContainer.make` — automatic backup, rollback, pre/post hooks
+- [x] `SafeModelContainer.dryRun` — simulate without touching the real store
+- [x] `MigrationTestCase` — fixture helpers, migrate helpers, chain testing
+- [x] `assertMigrationSnapshot` — auto-record + byte-stable JSON diff
+- [x] Benchmark + seed helpers in `StrataTesting`
+- [x] `SchemaDiff.diff(from:to:)` — declared-schema diff
+- [x] `MigrationReport.render` — human-readable diff and plan rendering
+- [x] `strata` CLI binary with inspect / diff / drift subcommands
+- [x] 13 integration tests against real SwiftData stores on disk
+- [ ] `StoreIntrospector` — SQLite backend for on-disk schema reading
+- [ ] `strata inspect` / `strata drift` fully functional (blocked by above)
+- [ ] CloudKit-synced store support
+- [ ] `@CapturableObservable` macro for capturing `@Observable` view-model state in `StrataTesting`
+- [ ] Schema version metadata in store (strata inspect can report current version)
+
+## Examples
+
+The `Examples/PostsDemo` target exercises every primitive across a four-version
+chain. Run the tests to see it migrate a real store end-to-end:
+
+```bash
+swift test --filter MigrationChainTests
+```
 
 ## Contributing
 
-This is a from-scratch v0.1 — pre-tagging it now would be premature. PRs welcome once we stabilise the public surface and ship an `0.1.0` tag.
+Issues, PRs, and discussions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Author / License
+## License
 
-Chethan Nayak <chethannayak010@gmail.com>
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) © Chethan Nayak
