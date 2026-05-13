@@ -76,9 +76,11 @@ let package = Package(
     ]
 )
 
+// Swift 6 enables strict concurrency by default — no opt-in needed.
+// `ExistentialAny` becomes default in Swift 7; opt in now so the
+// codebase is forward-compatible.
 var strictConcurrency: [SwiftSetting] {
     [
-        .enableUpcomingFeature("StrictConcurrency"),
         .enableUpcomingFeature("ExistentialAny"),
     ]
 }
