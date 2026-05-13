@@ -1,0 +1,10 @@
+version: 1
+builder:
+  configs:
+    - platform: macosSpm
+      scheme: Strata
+      swift_version: '6'
+      documentation_targets:
+        - StrataCore
+        - StrataTesting
+        - StrataInspect
