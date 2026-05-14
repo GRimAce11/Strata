@@ -1,5 +1,5 @@
 public import Foundation
-public import SwiftData
+@preconcurrency public import SwiftData
 
 /// V3 normalises authors into their own entity and renames `body` to
 /// `content`. Custom migration: ``Rename`` preserves body values,

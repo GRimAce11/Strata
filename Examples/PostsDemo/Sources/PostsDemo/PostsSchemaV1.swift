@@ -1,5 +1,5 @@
 public import Foundation
-public import SwiftData
+@preconcurrency public import SwiftData
 
 /// First-release schema. Just posts.
 public enum PostsSchemaV1: VersionedSchema {

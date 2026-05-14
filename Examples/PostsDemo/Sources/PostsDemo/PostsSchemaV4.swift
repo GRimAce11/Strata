@@ -1,5 +1,5 @@
 public import Foundation
-public import SwiftData
+@preconcurrency public import SwiftData
 
 /// V4 adds non-optional `publishedAt: Date` and a `slug: String`.
 ///

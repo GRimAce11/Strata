@@ -1,5 +1,5 @@
 public import Foundation
-public import SwiftData
+@preconcurrency public import SwiftData
 
 /// V2 adds an optional authorName. Lightweight migration: SwiftData
 /// adds the column with a nil default, no data movement required.
