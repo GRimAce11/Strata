@@ -1,3 +1,7 @@
+// The strata CLI is a macOS-only tool. On other Apple platforms this
+// file compiles to nothing; iOS/tvOS/watchOS/visionOS apps depend only
+// on StrataCore and never link StrataCLI.
+#if os(macOS)
 internal import ArgumentParser
 internal import Foundation
 internal import StrataCore
@@ -8,7 +12,7 @@ struct Strata: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "strata",
         abstract: "Inspect SwiftData stores and migration plans.",
-        version: "0.1.0-dev",
+        version: "0.1.0",
         subcommands: [Inspect.self, Diff.self, Drift.self],
         defaultSubcommand: Inspect.self
     )
@@ -27,9 +31,6 @@ struct Inspect: AsyncParsableCommand {
 
     func run() async throws {
         let url = URL(fileURLWithPath: storeURL)
-        // Milestone 3 deferred: StoreIntrospector.actualSchema currently
-        // throws Unimplemented. We surface a clear message rather than
-        // pretending to work.
         do {
             let schema = try StoreIntrospector.actualSchema(at: url)
             print("Store: \(url.path)")
@@ -51,18 +52,14 @@ struct Diff: AsyncParsableCommand {
         commandName: "diff",
         abstract: "Render a schema diff between two declared VersionedSchema types.",
         discussion: """
-            This command is intended to be invoked from your test target or
-            a tool target that has linked your app's schemas. It accepts the
-            schema names via a programmatic API rather than the command line
-            so we do not need to load Swift types from disk.
-
-            See Documentation/CLI.md for usage.
+            Programmatic entry point only — load your schemas in a tool target
+            and call SchemaDiff.diff(from:to:) directly. See Documentation/CLI.md.
             """
     )
 
     func run() async throws {
         let msg = "strata diff is not invokable directly from the command line. " +
-                  "Use `SchemaDiff.diff(from:to:)` from your test target.\n"
+                  "Use `SchemaDiff.diff(from:to:)` from your tool or test target.\n"
         FileHandle.standardError.write(Data(msg.utf8))
         throw ExitCode(64)
     }
@@ -90,3 +87,4 @@ struct Drift: AsyncParsableCommand {
         }
     }
 }
+#endif // os(macOS)

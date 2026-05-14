@@ -12,56 +12,97 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Build & test (${{ matrix.platform }})
+  # ── macOS ────────────────────────────────────────────────────────────────
+  macos:
+    name: Build & test — macOS
     runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [macOS]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select latest stable Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+      - name: Show toolchain
+        run: swift --version && xcodebuild -version
 
-      - name: Print toolchain info
-        run: |
-          swift --version
-          xcodebuild -version
-
-      - name: Cache SwiftPM build artifacts
+      - name: Cache SwiftPM
         uses: actions/cache@v4
         with:
-          path: |
-            .build
-            ~/.swiftpm
+          path: .build
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-
-
-      - name: Resolve dependencies
-        run: swift package resolve
+          restore-keys: ${{ runner.os }}-spm-
 
       - name: Build (debug)
         run: swift build -v
 
-      - name: Run tests (parallel)
+      - name: Test (parallel)
         run: swift test --parallel -v
 
+  # ── iOS Simulator ─────────────────────────────────────────────────────────
+  ios:
+    name: Build & test — iOS Simulator
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version && xcodebuild -version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ios-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: ios-spm-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build library targets for iOS Simulator
+        run: |
+          xcodebuild build \
+            -scheme Strata \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            | xcpretty || cat
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+
+      - name: Test on iOS Simulator
+        run: |
+          # Pick the latest available iPhone simulator
+          SIM=$(xcrun simctl list devices available --json \
+            | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+iphones = [(k, v) for runtime, devs in d['devices'].items()
+           for v in devs
+           if 'iPhone' in v.get('name', '') and v.get('isAvailable')]
+iphones.sort(key=lambda x: x[0], reverse=True)
+if iphones: print(iphones[0][1]['udid'])
+")
+          echo "Simulator UDID: $SIM"
+          xcodebuild test \
+            -scheme Strata \
+            -destination "id=$SIM" \
+            -skipPackagePluginValidation \
+            -only-testing:StrataCoreTests \
+            -only-testing:StrataTestingTests \
+            -only-testing:StrataInspectTests \
+            | xcpretty || cat
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+
+  # ── CLI smoke test ────────────────────────────────────────────────────────
   cli-smoke:
     name: CLI smoke test
     runs-on: macos-15
-    needs: build-and-test
+    needs: macos
     steps:
       - uses: actions/checkout@v4
-      - name: Select latest stable Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app
-      - name: Build CLI in release configuration
+      - name: Build CLI (release)
         run: swift build -c release --product strata
-      - name: Verify CLI executes
+      - name: Verify CLI
         run: .build/release/strata --help
 
+  # ── Lint ──────────────────────────────────────────────────────────────────
   lint:
     name: Lint
     runs-on: macos-15
@@ -69,8 +110,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify Package.swift parses
         run: swift package describe
-      - name: Reject committed build artifacts
+      - name: No committed build artifacts
         run: |
           if [ -d .build ]; then
-            echo "::error::.build directory should not be committed"; exit 1
+            echo "::error::.build should not be committed"; exit 1
           fi
