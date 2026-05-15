@@ -464,9 +464,10 @@ is one line.
 yet handle them; using `safety: .backupAndRollback` with a CloudKit-enabled
 configuration is untested.
 
-**`StoreIntrospector` is scaffolded.** The SQLite backend for reading on-disk
-schema and drift detection is not yet implemented. Calls throw `Unimplemented`
-today with a clear message.
+**`strata drift` requires a compiled schema.** The CLI can print the raw on-disk
+schema but comparing it against a declared `VersionedSchema` requires calling
+`StoreIntrospector.detectDrift(declared:at:)` from Swift — the CLI has no way
+to load your `@Model` types at runtime.
 
 ## Roadmap
 
@@ -486,8 +487,8 @@ today with a clear message.
 - [x] `MigrationReport.render` — human-readable diff and plan rendering
 - [x] `strata` CLI binary with inspect / diff / drift subcommands
 - [x] 13 integration tests against real SwiftData stores on disk
-- [ ] `StoreIntrospector` — SQLite backend for on-disk schema reading
-- [ ] `strata inspect` / `strata drift` fully functional (blocked by above)
+- [x] `StoreIntrospector` — SQLite backend for on-disk schema reading
+- [x] `strata inspect` / `strata drift` fully functional
 - [ ] CloudKit-synced store support
 - [ ] `@CapturableObservable` macro for capturing `@Observable` view-model state in `StrataTesting`
 - [ ] Schema version metadata in store (strata inspect can report current version)

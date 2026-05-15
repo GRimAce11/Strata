@@ -29,19 +29,69 @@ struct Inspect: AsyncParsableCommand {
     @Argument(help: "Path to the .store file to inspect.")
     var storeURL: String
 
+    @Flag(name: .shortAndLong, help: "Show all columns for each table.")
+    var verbose: Bool = false
+
     func run() async throws {
         let url = URL(fileURLWithPath: storeURL)
+        let schema: RuntimeSchema
         do {
-            let schema = try StoreIntrospector.actualSchema(at: url)
-            print("Store: \(url.path)")
-            print("Tables: \(schema.tables.count)")
-            for table in schema.tables {
-                print("  · \(table.name) (\(table.columns.count) columns)")
-            }
-        } catch let err as StoreIntrospector.Unimplemented {
-            FileHandle.standardError.write(Data("\(err.description)\n".utf8))
-            throw ExitCode(2)
+            schema = try StoreIntrospector.actualSchema(at: url)
+        } catch {
+            FileHandle.standardError.write(Data("strata inspect: \(error)\n".utf8))
+            throw ExitCode(1)
         }
+
+        print("Store: \(url.lastPathComponent)")
+        if let uuid = schema.metadataVersion {
+            print("UUID:  \(uuid)")
+        }
+
+        // SwiftData entity tables: Z + ENTITY_UPPERCASE, no underscore.
+        // Z_ tables are SwiftData system tables; ACHANGE/ATRANSACTION/… are
+        // persistent history tables. Both are treated as internal.
+        let userTables   = schema.tables.filter { $0.name.hasPrefix("Z") && !$0.name.hasPrefix("Z_") }
+        let systemTables = schema.tables.filter { !$0.name.hasPrefix("Z") || $0.name.hasPrefix("Z_") }
+
+        print("\nModels (\(userTables.count)):")
+        for table in userTables.sorted(by: { $0.name < $1.name }) {
+            if verbose {
+                print("  \(table.name)")
+                for col in table.columns {
+                    let flags = columnFlags(col)
+                    print("    · \(col.name): \(col.type)\(flags.isEmpty ? "" : "  [\(flags)]")")
+                }
+            } else {
+                let userCols = table.columns.filter { !["Z_PK", "Z_ENT", "Z_OPT"].contains($0.name) }
+                print("  \(table.name)  (\(userCols.count) attribute column\(userCols.count == 1 ? "" : "s"))")
+            }
+        }
+
+        if verbose && !systemTables.isEmpty {
+            print("\nInternal tables (\(systemTables.count)):")
+            for table in systemTables.sorted(by: { $0.name < $1.name }) {
+                print("  \(table.name)  (\(table.columns.count) columns)")
+            }
+        }
+
+        let userIndexes = schema.indexes.filter { !$0.name.hasPrefix("sqlite_") }
+        if !userIndexes.isEmpty {
+            print("\nIndexes (\(userIndexes.count)):")
+            for index in userIndexes.sorted(by: { $0.name < $1.name }) {
+                let unique = index.isUnique ? " UNIQUE" : ""
+                print("  \(index.name)\(unique)")
+                if verbose {
+                    print("    ON \(index.table)(\(index.columns.joined(separator: ", ")))")
+                }
+            }
+        }
+    }
+
+    private func columnFlags(_ col: RuntimeSchema.Column) -> String {
+        var flags: [String] = []
+        if col.isPrimaryKey { flags.append("PK") }
+        if !col.isNullable  { flags.append("NOT NULL") }
+        return flags.joined(separator: ", ")
     }
 }
 
@@ -70,7 +120,12 @@ struct Diff: AsyncParsableCommand {
 struct Drift: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "drift",
-        abstract: "Report drift between a declared schema and an on-disk store."
+        abstract: "Report drift between a declared schema and an on-disk store.",
+        discussion: """
+            Reads the on-disk store schema and prints the tables and columns found.
+            To compare against a declared Swift schema, call
+            StoreIntrospector.detectDrift(declared:at:) from your tool or test target.
+            """
     )
 
     @Argument(help: "Path to the .store file to check.")
@@ -78,13 +133,33 @@ struct Drift: AsyncParsableCommand {
 
     func run() async throws {
         let url = URL(fileURLWithPath: storeURL)
+        let schema: RuntimeSchema
         do {
-            _ = try StoreIntrospector.actualSchema(at: url)
-            print("(no declared schema linked; drift detection requires schema metadata)")
-        } catch let err as StoreIntrospector.Unimplemented {
-            FileHandle.standardError.write(Data("\(err.description)\n".utf8))
-            throw ExitCode(2)
+            schema = try StoreIntrospector.actualSchema(at: url)
+        } catch {
+            FileHandle.standardError.write(Data("strata drift: \(error)\n".utf8))
+            throw ExitCode(1)
         }
+
+        print("Store: \(url.lastPathComponent)")
+        if let uuid = schema.metadataVersion {
+            print("UUID:  \(uuid)")
+        }
+
+        let userTables = schema.tables.filter {
+            $0.name.hasPrefix("Z") && !$0.name.hasPrefix("Z_")
+        }
+        print("\nOn-disk tables (\(userTables.count)):")
+        for table in userTables.sorted(by: { $0.name < $1.name }) {
+            let userCols = table.columns.filter { !["Z_PK", "Z_ENT", "Z_OPT"].contains($0.name) }
+            print("  \(table.name)  (\(userCols.count) column\(userCols.count == 1 ? "" : "s"))")
+            for col in userCols {
+                print("    · \(col.name): \(col.type)")
+            }
+        }
+
+        print("\nNote: to detect drift against a declared schema, call")
+        print("      StoreIntrospector.detectDrift(declared:at:) from your Swift code.")
     }
 }
 #endif // os(macOS)

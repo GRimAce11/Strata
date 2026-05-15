@@ -34,7 +34,8 @@ let package = Package(
         .target(
             name: "StrataInspect",
             dependencies: ["StrataCore"],
-            path: "Sources/StrataInspect"
+            path: "Sources/StrataInspect",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(
             name: "StrataCLI",
