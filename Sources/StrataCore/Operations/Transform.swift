@@ -18,7 +18,7 @@ import SwiftData
 ///
 /// 1. `capture` runs in `willMigrate` against the source schema.
 ///    Produce a `Snapshot` (a `Sendable` value type) for each source
-///    entity. Snapshots are stashed by `PersistentIdentifier`.
+///    entity. Snapshots are accumulated in batches and stashed.
 /// 2. `build` runs in `didMigrate` against the destination schema. For
 ///    each captured snapshot, produce one or more destination entities
 ///    and insert them into the supplied context.
@@ -59,7 +59,12 @@ public struct Transform<
     /// than duplicating them.
     public let replaceCarried: Bool
 
-    private let stashKey: String
+    /// Rows fetched per batch during `willMigrate` and during the
+    /// `replaceCarried` deletion pass in `didMigrate`.
+    public var batchSize: Int = 500
+
+    // UUID-based stash key: collision-free, no _kvcKeyPathString dependency.
+    private let stashKey = UUID().uuidString
 
     public init(
         from: From.Type,
@@ -73,15 +78,22 @@ public struct Transform<
         self.replaceCarried = replaceCarried
         self.description = "Transform \(From.self) → \(To.self)" +
             (replaceCarried ? " (replace carried)" : "")
-        self.stashKey = "Transform|\(String(reflecting: From.self))->\(String(reflecting: To.self))"
     }
 
     public func willMigrate(_ context: ModelContext, stash: MigrationStash) throws {
-        let sources = try context.fetch(FetchDescriptor<From>())
         var snapshots: [Snapshot] = []
-        snapshots.reserveCapacity(sources.count)
-        for source in sources {
-            snapshots.append(try capture(source))
+        var offset = 0
+        while true {
+            var descriptor = FetchDescriptor<From>()
+            descriptor.fetchLimit = batchSize
+            descriptor.fetchOffset = offset
+            let batch = try context.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+            for source in batch {
+                snapshots.append(try capture(source))
+            }
+            offset += batch.count
+            if batch.count < batchSize { break }
         }
         stash.set(stashKey, snapshots)
         StrataLog.operation.debug(
@@ -93,8 +105,15 @@ public struct Transform<
         guard let snapshots: [Snapshot] = stash.get(stashKey) else { return }
 
         if replaceCarried {
-            for carried in try context.fetch(FetchDescriptor<To>()) {
-                context.delete(carried)
+            // Batch the deletion to avoid loading the full entity graph at once.
+            // After each save the deleted rows are gone, so offset stays at 0.
+            while true {
+                var descriptor = FetchDescriptor<To>()
+                descriptor.fetchLimit = batchSize
+                let batch = try context.fetch(descriptor)
+                guard !batch.isEmpty else { break }
+                for entity in batch { context.delete(entity) }
+                try context.save()
             }
         }
 

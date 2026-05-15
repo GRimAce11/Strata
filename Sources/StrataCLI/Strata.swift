@@ -13,7 +13,7 @@ struct Strata: AsyncParsableCommand {
         commandName: "strata",
         abstract: "Inspect SwiftData stores and migration plans.",
         version: "0.1.0",
-        subcommands: [Inspect.self, Diff.self, Drift.self],
+        subcommands: [Inspect.self, Diff.self, Drift.self, StoreDiff.self],
         defaultSubcommand: Inspect.self
     )
 }
@@ -160,6 +160,84 @@ struct Drift: AsyncParsableCommand {
 
         print("\nNote: to detect drift against a declared schema, call")
         print("      StoreIntrospector.detectDrift(declared:at:) from your Swift code.")
+    }
+}
+
+// MARK: - strata store-diff
+
+struct StoreDiff: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "store-diff",
+        abstract: "Show structural differences between two SwiftData store files.",
+        discussion: """
+            Compares the on-disk schema of two store files and reports added,
+            removed, and modified tables and columns. Useful for verifying
+            that a migration changed exactly what you intended.
+            """
+    )
+
+    @Argument(help: "Path to the first .store file (baseline).")
+    var storeA: String
+
+    @Argument(help: "Path to the second .store file (comparison).")
+    var storeB: String
+
+    func run() async throws {
+        let urlA = URL(fileURLWithPath: storeA)
+        let urlB = URL(fileURLWithPath: storeB)
+
+        let schemaA: RuntimeSchema
+        let schemaB: RuntimeSchema
+        do {
+            schemaA = try StoreIntrospector.actualSchema(at: urlA)
+            schemaB = try StoreIntrospector.actualSchema(at: urlB)
+        } catch {
+            FileHandle.standardError.write(Data("strata store-diff: \(error)\n".utf8))
+            throw ExitCode(1)
+        }
+
+        print("\(urlA.lastPathComponent)  →  \(urlB.lastPathComponent)")
+        print(String(repeating: "─", count: 50))
+
+        let tablesA = Dictionary(uniqueKeysWithValues: schemaA.tables.map { ($0.name, $0) })
+        let tablesB = Dictionary(uniqueKeysWithValues: schemaB.tables.map { ($0.name, $0) })
+        let allTables = Set(tablesA.keys).union(tablesB.keys).sorted()
+
+        var hasChanges = false
+        for name in allTables {
+            switch (tablesA[name], tablesB[name]) {
+            case (nil, let b?):
+                print("+ \(name)  (\(b.columns.count) columns)")
+                hasChanges = true
+            case (_, nil):
+                print("- \(name)")
+                hasChanges = true
+            case (let a?, let b?):
+                let colsA = Dictionary(uniqueKeysWithValues: a.columns.map { ($0.name, $0) })
+                let colsB = Dictionary(uniqueKeysWithValues: b.columns.map { ($0.name, $0) })
+                let allCols = Set(colsA.keys).union(colsB.keys).sorted()
+                var colChanges: [String] = []
+                for col in allCols {
+                    switch (colsA[col], colsB[col]) {
+                    case (nil, let cb?): colChanges.append("  + \(cb.name): \(cb.type)")
+                    case (_, nil):       colChanges.append("  - \(col)")
+                    case (let ca?, let cb?) where ca.type != cb.type:
+                        colChanges.append("  ~ \(col): \(ca.type) → \(cb.type)")
+                    case (_, _): break  // unchanged
+                    }
+                }
+                if !colChanges.isEmpty {
+                    print("~ \(name)")
+                    colChanges.forEach { print($0) }
+                    hasChanges = true
+                }
+            default: break
+            }
+        }
+
+        if !hasChanges {
+            print("(no differences)")
+        }
     }
 }
 #endif // os(macOS)

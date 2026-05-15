@@ -78,7 +78,7 @@ final class StoreIntrospectorTests: XCTestCase, MigrationTestCase {
     func test_actualSchema_throws_for_nonexistent_file() {
         let badURL = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString)/store.sqlite")
         XCTAssertThrowsError(try StoreIntrospector.actualSchema(at: badURL)) { error in
-            guard case MigrationError.storeUnreadable = error else {
+            guard let me = error as? MigrationError, case .storeUnreadable = me else {
                 XCTFail("Expected MigrationError.storeUnreadable, got \(error)")
                 return
             }

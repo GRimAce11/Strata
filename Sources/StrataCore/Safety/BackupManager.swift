@@ -1,12 +1,13 @@
 import Foundation
 
-/// Copies a SwiftData store (and its `-wal` / `-shm` companions) to a
-/// sibling backup directory, and restores from one on rollback.
+/// Copies a SwiftData store to a sibling backup directory and restores
+/// from one on rollback.
 ///
-/// SwiftData stores are sqlite databases. The store URL points to the
-/// primary `.store` file, but at runtime sqlite may have written changes
-/// to a write-ahead log (`-wal`) or shared-memory file (`-shm`) that
-/// must be carried along for the backup to be coherent.
+/// Backup uses ``SQLiteStoreBackup`` (the sqlite3 online backup API) rather
+/// than a raw filesystem copy. This guarantees a WAL-consistent snapshot:
+/// the destination is a clean, WAL-free `.store` file that contains all
+/// committed transactions from the source, regardless of whether a `-wal`
+/// file was present at copy time.
 package struct BackupManager {
 
     /// Where backups are placed: a sibling directory of the store named
@@ -30,21 +31,21 @@ package struct BackupManager {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
 
         do {
-            for url in storeAndCompanions() where FileManager.default.fileExists(atPath: url.path) {
-                let dest = dir.appending(path: url.lastPathComponent)
-                try FileManager.default.copyItem(at: url, to: dest)
-            }
+            // Use the SQLite online backup API for a WAL-consistent snapshot.
+            // Produces a single, clean .store file — no WAL/SHM companion needed.
+            let dest = dir.appending(path: storeURL.lastPathComponent)
+            try SQLiteStoreBackup.copy(from: storeURL, to: dest)
             StrataLog.safety.notice("Backup created at \(dir.path, privacy: .public)")
             return dir
         } catch {
-            // Clean up partial backup on failure
             try? FileManager.default.removeItem(at: dir)
             throw MigrationError.backupFailed(underlying: error, path: storeURL)
         }
     }
 
     /// Restore the store from a previously-created backup directory.
-    /// Deletes any current `.store` / `-wal` / `-shm` first.
+    /// Deletes any current `.store` / `-wal` / `-shm` first so the restored
+    /// state starts clean.
     package func restore(from backupDir: URL) throws {
         do {
             for url in storeAndCompanions() {
@@ -68,12 +69,14 @@ package struct BackupManager {
     /// Called after a successful migration to bound disk usage.
     package func pruneOlderThan(daysToKeep: Int) {
         guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: backupRoot, includingPropertiesForKeys: [.contentModificationDateKey]
+            at: backupRoot, includingPropertiesForKeys: [.creationDateKey]
         ) else { return }
         let cutoff = Date().addingTimeInterval(-Double(daysToKeep) * 86_400)
         for entry in entries {
-            let values = try? entry.resourceValues(forKeys: [.contentModificationDateKey])
-            if let modified = values?.contentModificationDate, modified < cutoff {
+            // Creation date is stable — backup dirs are written once and never
+            // modified in place, so modification date can drift on APFS.
+            let values = try? entry.resourceValues(forKeys: [.creationDateKey])
+            if let created = values?.creationDate, created < cutoff {
                 try? FileManager.default.removeItem(at: entry)
             }
         }

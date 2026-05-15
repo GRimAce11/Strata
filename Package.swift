@@ -24,7 +24,8 @@ let package = Package(
     targets: [
         .target(
             name: "StrataCore",
-            path: "Sources/StrataCore"
+            path: "Sources/StrataCore",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .target(
             name: "StrataTesting",

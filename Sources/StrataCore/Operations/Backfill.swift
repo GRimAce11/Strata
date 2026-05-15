@@ -36,42 +36,59 @@ public struct Backfill<Model: PersistentModel, Value: Sendable>: MigrationOperat
     /// (e.g. by an earlier ``Rename``).
     public let overwrite: Bool
 
+    /// Rows fetched and written per batch. Lower this to reduce peak
+    /// memory and dirty-object accumulation on very large stores.
+    public let batchSize: Int
+
     public init(
         _ keyPath: ReferenceWritableKeyPath<Model, Value>,
         overwrite: Bool = true,
+        batchSize: Int = 500,
         compute: @escaping @Sendable (Model) throws -> Value
     ) {
         self.keyPath = keyPath
         self.compute = compute
         self.overwrite = overwrite
+        self.batchSize = batchSize
         self.description = "Backfill \(Model.self).\(_strataPropertyName(keyPath))" +
             (overwrite ? " (overwrite)" : "")
     }
 
     public func didMigrate(_ context: ModelContext, stash: MigrationStash) throws {
-        let objects = try context.fetch(FetchDescriptor<Model>())
         var written = 0
-        for object in objects {
-            if !overwrite, isPresent(object[keyPath: keyPath]) {
-                continue
+        var total = 0
+        var offset = 0
+        while true {
+            var descriptor = FetchDescriptor<Model>()
+            descriptor.fetchLimit = batchSize
+            descriptor.fetchOffset = offset
+            let batch = try context.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+            total += batch.count
+            for object in batch {
+                if !overwrite, isPresent(object[keyPath: keyPath]) { continue }
+                object[keyPath: keyPath] = try compute(object)
+                written += 1
             }
-            object[keyPath: keyPath] = try compute(object)
-            written += 1
+            // Flush each batch so the dirty-object graph stays bounded.
+            // The orchestrator in SchemaMigrationPlanConversion saves again
+            // after all body ops complete; that second save is a safe no-op.
+            if context.hasChanges { try context.save() }
+            offset += batch.count
+            if batch.count < batchSize { break }
         }
         StrataLog.operation.debug(
-            "Backfill wrote \(written, privacy: .public)/\(objects.count, privacy: .public) row(s) for \(self.description, privacy: .public)"
+            "Backfill wrote \(written, privacy: .public)/\(total, privacy: .public) row(s) for \(self.description, privacy: .public)"
         )
     }
 
     /// Returns `true` if the value is non-nil; consulted only when
     /// `overwrite == false`. For non-optional `Value` types this is
-    /// always `true`, which means `overwrite: false` is only useful for
-    /// `Optional`-valued backfills.
+    /// always `true`, meaning `overwrite: false` is only meaningful
+    /// for `Optional`-valued backfills.
     private func isPresent(_ value: Value) -> Bool {
         let mirror = Mirror(reflecting: value)
-        if mirror.displayStyle == .optional, mirror.children.isEmpty {
-            return false
-        }
+        if mirror.displayStyle == .optional, mirror.children.isEmpty { return false }
         return true
     }
 }

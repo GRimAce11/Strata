@@ -11,6 +11,16 @@ public enum MigrationError: Error, Sendable, CustomStringConvertible {
     /// Always indicates a bug in the migration plan or unexpected store state.
     case renameStashMissing(model: String, property: String)
 
+    /// A ``Rename`` operation captured source values but could not restore
+    /// any of them onto destination entities. This means the cross-migration
+    /// row identity mapping produced no matches — typically because the
+    /// entity name changed between source and destination, or because the
+    /// `PersistentIdentifier` URI format changed.
+    ///
+    /// Use ``Rename/init(_:to:sourceKey:destinationKey:)`` to supply an
+    /// explicit, user-defined identity key and avoid this failure mode.
+    case renameDataLoss(model: String, property: String, captured: Int, restored: Int)
+
     /// An operation could not locate a persistent model by its identifier
     /// after the schema transition (typically because the entity was deleted).
     case persistentIDNotFound(model: String)
@@ -54,6 +64,11 @@ public enum MigrationError: Error, Sendable, CustomStringConvertible {
         case .renameStashMissing(let model, let property):
             return "Rename stash missing for \(model).\(property). " +
                    "Did willMigrate run? Did the source entity exist?"
+        case .renameDataLoss(let model, let property, let captured, let restored):
+            return "Rename data loss: captured \(captured) value(s) for " +
+                   "\(model).\(property) but restored \(restored). " +
+                   "Use Rename(_:to:sourceKey:destinationKey:) with an explicit " +
+                   "user-defined identity key to avoid this."
         case .persistentIDNotFound(let model):
             return "Persistent identifier not found for model \(model) after migration."
         case .nullsAfterMigration(let model, let property, let count):

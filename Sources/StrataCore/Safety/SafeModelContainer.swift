@@ -147,14 +147,10 @@ public enum SafeModelContainer {
             try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
             let copyURL = tmpDir.appending(path: storeURL.lastPathComponent)
 
-            // Copy primary store (companions optional but recommended).
-            for path in [storeURL,
-                         URL(fileURLWithPath: storeURL.path + "-wal"),
-                         URL(fileURLWithPath: storeURL.path + "-shm")]
-                where FileManager.default.fileExists(atPath: path.path) {
-                let dest = tmpDir.appending(path: path.lastPathComponent)
-                try FileManager.default.copyItem(at: path, to: dest)
-            }
+            // Use the SQLite online backup API for a WAL-consistent copy.
+            // Unlike a raw file copy, this reads the committed state of the
+            // live store correctly even when a -wal file is present.
+            try SQLiteStoreBackup.copy(from: storeURL, to: copyURL)
 
             _ = try await make(
                 for: schema,
