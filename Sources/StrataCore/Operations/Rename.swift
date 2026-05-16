@@ -45,7 +45,7 @@ public struct Rename<
     public let description: String
     public var phase: MigrationPhase { .captures }
 
-    /// Rows fetched per batch during `willMigrate`.
+    /// Rows fetched per batch during `willMigrate` and `didMigrate`.
     /// Lower this to reduce peak memory on very large stores.
     public var batchSize: Int = 500
 
@@ -134,28 +134,49 @@ public struct Rename<
         }
         guard !captured.isEmpty else { return }
 
-        let destinations = try context.fetch(FetchDescriptor<To>())
+        // Batch the destination fetch to avoid loading the full entity graph
+        // at once. Saves between batches keep the dirty-object pool bounded.
         var restored = 0
-        for dest in destinations {
-            if let value = captured[destKeyExtractor(dest)] {
-                dest[keyPath: toKeyPath] = value
-                restored += 1
+        var offset = 0
+        while true {
+            var descriptor = FetchDescriptor<To>()
+            descriptor.fetchLimit = batchSize
+            descriptor.fetchOffset = offset
+            let batch = try context.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+            for dest in batch {
+                if let value = captured[destKeyExtractor(dest)] {
+                    dest[keyPath: toKeyPath] = value
+                    restored += 1
+                }
             }
+            if context.hasChanges { try context.save() }
+            offset += batch.count
+            if batch.count < batchSize { break }
         }
+
         StrataLog.operation.info(
             "[Strata] Rename did: restored \(restored, privacy: .public)/\(captured.count, privacy: .public) for \(self.description, privacy: .public)"
         )
 
-        // Throw rather than silently discard data. Zero restores for a non-empty
-        // captured set means the identity mapping produced no matches — most
-        // commonly caused by the @Model class name changing between versions.
-        // Use Rename(_:to:sourceKey:destinationKey:) to supply an explicit key.
+        // Zero restores for a non-empty captured set means the identity mapping
+        // produced no matches at all — throw rather than silently discard data.
         if restored == 0 {
             throw MigrationError.renameDataLoss(
                 model: String(describing: From.self),
                 property: _strataPropertyName(fromKeyPath),
                 captured: captured.count,
                 restored: 0
+            )
+        }
+
+        // Partial restore: some rows mapped successfully but others didn't.
+        // This can happen when a subset of entities has a different class name
+        // (e.g. a polymorphic schema). Log a warning but do not throw, since
+        // the successfully restored values are correct.
+        if restored < captured.count {
+            StrataLog.operation.warning(
+                "[Strata] Rename partial: \(captured.count - restored, privacy: .public) of \(captured.count, privacy: .public) values had no matching destination for \(self.description, privacy: .public). Use sourceKey:destinationKey: for explicit row identity."
             )
         }
     }

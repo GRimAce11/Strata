@@ -40,16 +40,25 @@ public struct Backfill<Model: PersistentModel, Value: Sendable>: MigrationOperat
     /// memory and dirty-object accumulation on very large stores.
     public let batchSize: Int
 
+    /// Sort applied to each batch fetch. An empty array (the default) relies
+    /// on SQLite's natural Z_PK rowid order, which is deterministic within a
+    /// single `ModelContext` and consistent across batch boundaries as long as
+    /// no rows are inserted or deleted during the operation. Supply an explicit
+    /// sort if you need a stronger ordering guarantee.
+    public let sortBy: [SortDescriptor<Model>]
+
     public init(
         _ keyPath: ReferenceWritableKeyPath<Model, Value>,
         overwrite: Bool = true,
         batchSize: Int = 500,
+        sortBy: [SortDescriptor<Model>] = [],
         compute: @escaping @Sendable (Model) throws -> Value
     ) {
         self.keyPath = keyPath
         self.compute = compute
         self.overwrite = overwrite
         self.batchSize = batchSize
+        self.sortBy = sortBy
         self.description = "Backfill \(Model.self).\(_strataPropertyName(keyPath))" +
             (overwrite ? " (overwrite)" : "")
     }
@@ -62,6 +71,7 @@ public struct Backfill<Model: PersistentModel, Value: Sendable>: MigrationOperat
             var descriptor = FetchDescriptor<Model>()
             descriptor.fetchLimit = batchSize
             descriptor.fetchOffset = offset
+            descriptor.sortBy = sortBy
             let batch = try context.fetch(descriptor)
             guard !batch.isEmpty else { break }
             total += batch.count

@@ -20,20 +20,26 @@ public enum Assert {
     /// Typical use: a column transitioning from optional to non-optional
     /// in the next schema version — you want to be sure the backfill
     /// you wrote actually covered every row.
+    ///
+    /// - Parameter batchSize: Rows scanned per fetch. Default 500.
     public static func noNulls<M: PersistentModel, V>(
-        _ keyPath: KeyPath<M, V?>
+        _ keyPath: KeyPath<M, V?>,
+        batchSize: Int = 500
     ) -> some MigrationOperation {
-        NoNullsAssertion(keyPath: keyPath)
+        NoNullsAssertion(keyPath: keyPath, batchSize: batchSize)
     }
 
     /// Assert that every entity has a distinct value for the given
     /// property. Pair this with a `@Attribute(.unique)` declaration to
     /// catch migrations that violate uniqueness *before* the next save
     /// makes the store unrecoverable.
+    ///
+    /// - Parameter batchSize: Rows scanned per fetch. Default 500.
     public static func unique<M: PersistentModel, V: Hashable & Sendable>(
-        _ keyPath: KeyPath<M, V>
+        _ keyPath: KeyPath<M, V>,
+        batchSize: Int = 500
     ) -> some MigrationOperation {
-        UniqueAssertion(keyPath: keyPath)
+        UniqueAssertion(keyPath: keyPath, batchSize: batchSize)
     }
 
     /// Assert that the entity count matches a predicate after migration.
@@ -65,12 +71,25 @@ public enum Assert {
 
 private struct NoNullsAssertion<M: PersistentModel, V>: MigrationOperation, @unchecked Sendable {
     let keyPath: KeyPath<M, V?>
+    let batchSize: Int
     var description: String { "Assert noNulls \(M.self).\(_strataPropertyName(keyPath))" }
     var phase: MigrationPhase { .assertions }
 
     func didMigrate(_ context: ModelContext, stash: MigrationStash) throws {
-        let nilCount = try context.fetch(FetchDescriptor<M>())
-            .lazy.filter { $0[keyPath: keyPath] == nil }.count
+        // Batch the scan so we never load the full entity graph at once.
+        // We only read one property per entity — no writes, no saves.
+        var nilCount = 0
+        var offset = 0
+        while true {
+            var descriptor = FetchDescriptor<M>()
+            descriptor.fetchLimit = batchSize
+            descriptor.fetchOffset = offset
+            let batch = try context.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+            nilCount += batch.lazy.filter { $0[keyPath: keyPath] == nil }.count
+            offset += batch.count
+            if batch.count < batchSize { break }
+        }
         if nilCount > 0 {
             throw MigrationError.nullsAfterMigration(
                 model: String(describing: M.self),
@@ -83,16 +102,30 @@ private struct NoNullsAssertion<M: PersistentModel, V>: MigrationOperation, @unc
 
 private struct UniqueAssertion<M: PersistentModel, V: Hashable & Sendable>: MigrationOperation, @unchecked Sendable {
     let keyPath: KeyPath<M, V>
+    let batchSize: Int
     var description: String { "Assert unique \(M.self).\(_strataPropertyName(keyPath))" }
     var phase: MigrationPhase { .assertions }
 
     func didMigrate(_ context: ModelContext, stash: MigrationStash) throws {
+        // Build the seen-Set incrementally across batches.
+        // The Set grows O(n) in the number of distinct values, but each batch
+        // only loads `batchSize` entity objects into memory at a time.
         var seen = Set<V>()
         var duplicates = 0
-        for object in try context.fetch(FetchDescriptor<M>()) {
-            if !seen.insert(object[keyPath: keyPath]).inserted {
-                duplicates += 1
+        var offset = 0
+        while true {
+            var descriptor = FetchDescriptor<M>()
+            descriptor.fetchLimit = batchSize
+            descriptor.fetchOffset = offset
+            let batch = try context.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+            for object in batch {
+                if !seen.insert(object[keyPath: keyPath]).inserted {
+                    duplicates += 1
+                }
             }
+            offset += batch.count
+            if batch.count < batchSize { break }
         }
         if duplicates > 0 {
             throw MigrationError.duplicatesAfterMigration(
