@@ -56,9 +56,9 @@ let container = try await SafeModelContainer.make(
 
 ## Requirements
 
-| Swift | iOS | macOS | tvOS | watchOS | visionOS |
-|:-:|:-:|:-:|:-:|:-:|:-:|
-| 6.0+ | 17+ | 14+ | 17+ | 10+ | 1.0+ |
+| Swift | iOS | macOS | Mac Catalyst | tvOS | watchOS | visionOS |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 6.0+ | 17+ | 14+ | 17+ | 17+ | 10+ | 1.0+ |
 
 ## Installation
 
@@ -68,7 +68,7 @@ Add Strata to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/GRimAce11/Strata", from: "0.1.0"),
+    .package(url: "https://github.com/GRimAce11/Strata", from: "0.2.0"),
 ],
 targets: [
     .target(name: "MyApp",      dependencies: ["StrataCore"]),
