@@ -15,7 +15,9 @@ let package = Package(
         .library(name: "StrataCore",    targets: ["StrataCore"]),
         .library(name: "StrataTesting", targets: ["StrataTesting"]),
         .library(name: "StrataInspect", targets: ["StrataInspect"]),
-        .library(name: "PostsDemo",     targets: ["PostsDemo"]),
+        // PostsDemo is an internal example target used by the test suite.
+        // It is intentionally not exposed as a product — consumers should
+        // not depend on it.
         .executable(name: "strata",     targets: ["StrataCLI"]),
     ],
     dependencies: [

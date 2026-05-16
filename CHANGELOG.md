@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-19
+
+### Added
+
+- **`StoreIntrospector` SQLite backend** — `actualSchema(at:)` now reads
+  tables, columns, and indexes directly from the SQLite file using
+  `sqlite3_backup_*`. `detectDrift(declared:at:)` compares the on-disk
+  schema against a declared `VersionedSchema` and returns drift reasons.
+  Both `strata inspect` and `strata drift` CLI commands are now fully
+  functional.
+- **`strata store-diff <storeA> <storeB>`** — new CLI subcommand that
+  shows structural differences (added/removed/changed tables and columns)
+  between two on-disk store files.
+- **`Rename(_:to:sourceKey:destinationKey:)`** — explicit row-identity
+  overload. Supply a user-defined keypath (e.g. `id: String` or
+  `id: UUID`) for deterministic cross-migration row matching that does not
+  depend on any internal `PersistentIdentifier` representation.
+- **`MigrationError.renameDataLoss`** — thrown when a `Rename` captures
+  values in `willMigrate` but restores zero of them in `didMigrate`.
+  Previously this silently dropped data.
+- **`MigrationError.postMigrationHookFailed`** — distinct error case for
+  when the `postMigration` hook throws after a successful migration.
+  Callers can now distinguish hook failures from migration failures.
+- **`batchSize` parameter** on `Rename`, `Transform`, `Backfill`,
+  `DeleteAll`, `DeleteWhere`, `Assert.noNulls`, and `Assert.unique`
+  (default: 500). All operations now paginate large entity sets rather
+  than loading them in one shot.
+- **`sortBy` parameter on `Backfill`** — optional `[SortDescriptor<Model>]`
+  for deterministic batch-pagination order on stores with non-trivial
+  insert patterns.
+
+### Fixed
+
+- **First-launch crash** — `SafeModelContainer.make` with
+  `safety: .backupAndRollback` previously called `sqlite3_open_v2` on a
+  non-existent file and threw `MigrationError.backupFailed` on every new
+  app install. The backup is now skipped when the store doesn't exist yet.
+- **Backup on every launch** — a backup was made on every cold launch even
+  when no migration was needed. Strata now reads `Z_METADATA.Z_VERSION`
+  before and after `ModelContainer` init; if the version is unchanged the
+  tentative backup is discarded.
+- **`postMigration` hook rolling back successful migration** — if the hook
+  threw (e.g. an analytics call), `catch` restored the pre-migration backup
+  over an already-migrated store. The hook is now invoked outside the
+  rollback-guarded scope.
+- **`dryRun` temp-directory leak** — the copied store was never cleaned up
+  when the dry run failed. Fixed with `defer { removeItem(tmpDir) }`.
+- **Backup WAL inconsistency** — `BackupManager` and `dryRun` previously
+  used `FileManager.copyItem` which could copy an inconsistent WAL state.
+  Both now use `sqlite3_backup_*` (via `SQLiteStoreBackup`) which reads
+  only committed transactions.
+- **Backup pruning used modification date** — APFS can update the
+  modification date of backup directories when any file inside changes.
+  Pruning now uses `creationDateKey` which is set once and never changes.
+- **`Rename.didMigrate` unbatched** — destination entities were fetched
+  in one call regardless of store size. Now uses the same
+  `fetchLimit`/`fetchOffset` loop as `willMigrate`.
+- **`Assert.noNulls` / `Assert.unique` unbatched** — both assertions now
+  paginate the entity scan. `noNulls` counts nil values incrementally;
+  `unique` builds the seen-Set across batches.
+- **`DeleteAll` unbatched** — now uses a no-offset batch loop: fetch →
+  delete → save → repeat until empty.
+- **Partial `Rename` restoration silent** — when some rows matched the
+  identity key and others didn't, the unmatched values were silently
+  dropped. A `.warning`-level OSLog message is now emitted for
+  `restored < captured.count`.
+- **`_StrataAppleBridge` stash key collision** — stash keys were derived
+  via `_kvcKeyPathString` (Swift SPI) and could produce `"<unknown>"` for
+  properties whose KeyPath has no ObjC representation, causing multiple
+  operations to collide in the stash. Keys are now UUID-based.
+- **`PostsDemo` incorrectly exposed as a public SPM product** — external
+  consumers could accidentally depend on the internal example module. It
+  is now a target-only dependency used exclusively by the test suite.
+
+### Changed
+
+- `BackupManager.makeBackup()` returns `URL?` instead of `URL`; returns
+  `nil` (no backup) when the store file doesn't exist yet.
+- `Rename` stash key changed from a `_kvcKeyPathString`-derived string to
+  a per-instance UUID. This is an internal implementation detail with no
+  API impact.
+- `StoreIntrospector.Unimplemented` is preserved for source compatibility
+  but is no longer thrown by any implemented method.
+
 ## [0.1.0] — 2026-05-18
 
 Initial release. v0.1 ships Milestones 1 and 2 in full and a scaffolded
@@ -93,5 +177,6 @@ introspection has a stable protocol seam but is not yet implemented).
 - CloudKit-synced stores are not yet supported.
 - `StoreIntrospector`'s SQLite backend is not yet implemented.
 
-[Unreleased]: https://github.com/GRimAce11/Strata/compare/0.1.0...HEAD
+[Unreleased]: https://github.com/GRimAce11/Strata/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/GRimAce11/Strata/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/GRimAce11/Strata/releases/tag/0.1.0
