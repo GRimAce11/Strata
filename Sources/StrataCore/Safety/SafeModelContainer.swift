@@ -59,36 +59,45 @@ public enum SafeModelContainer {
         configurations: [ModelConfiguration] = []
     ) async throws -> ModelContainer {
 
-        // 1. Static validation. Cheap, runs before we touch the store.
+        // 1. Static validation — cheap, runs before touching the store.
         let validationErrors = plan.validate()
         if !validationErrors.isEmpty {
             throw MigrationError.validationFailed(reasons: validationErrors)
         }
 
-        // 2. Optional backup.
-        let backup = (safety != .none)
-            ? try BackupManager(storeURL: storeURL).makeBackup()
-            : nil
+        // 2. Optional backup. makeBackup() returns nil on first launch
+        //    (store doesn't exist yet) — nothing to back up.
+        let backup: URL?
+        if safety != .none {
+            backup = try BackupManager(storeURL: storeURL).makeBackup()
+        } else {
+            backup = nil
+        }
 
-        // 3. Pre-migration hook.
+        // 3. Snapshot the store's schema version so we can tell after the
+        //    ModelContainer init whether migration actually ran. If it didn't,
+        //    we discard the backup rather than accumulating one per launch.
+        let schemaVersionBefore = SQLiteStoreBackup.readSchemaVersion(at: storeURL)
+
+        // 4. Pre-migration hook.
         if let pre = plan.preMigration {
-            let hookContext = MigrationPlan.HookContext(
+            let ctx = MigrationPlan.HookContext(
                 storeURL: storeURL,
                 sourceVersion: plan.stages.first.map { String(describing: $0.fromSchema) } ?? "?",
                 destinationVersion: plan.stages.last.map { String(describing: $0.toSchema) } ?? "?"
             )
-            try pre(hookContext)
+            try pre(ctx)
         }
 
-        // 4. Build the SwiftData-native plan and container. SwiftData
-        // requires a SchemaMigrationPlan-conforming TYPE, not a value, so
-        // we install the runtime stages into a static bridge for the
-        // duration of the ModelContainer init.
+        // 5. Build the SwiftData-native plan and container. SwiftData requires
+        //    a SchemaMigrationPlan-conforming TYPE, not a value, so we install
+        //    the runtime stages into a static bridge for the duration of init.
         let appleStages = SchemaMigrationPlanFactory.stages(for: plan)
         let primary = ModelConfiguration(schema: schema, url: storeURL)
 
+        let container: ModelContainer
         do {
-            let container = try _StrataAppleBridge.shared.install(
+            container = try _StrataAppleBridge.shared.install(
                 schemas: plan.schemas,
                 stages: appleStages
             ) {
@@ -98,35 +107,55 @@ public enum SafeModelContainer {
                     configurations: [primary] + configurations
                 )
             }
-
-            // 5. Post-migration hook.
-            if let post = plan.postMigration {
-                let hookContext = MigrationPlan.HookContext(
-                    storeURL: storeURL,
-                    sourceVersion: plan.stages.first.map { String(describing: $0.fromSchema) } ?? "?",
-                    destinationVersion: plan.stages.last.map { String(describing: $0.toSchema) } ?? "?"
-                )
-                try post(hookContext)
-            }
-
-            // 6. Bound disk usage from backups.
-            if safety != .none {
-                BackupManager(storeURL: storeURL).pruneOlderThan(daysToKeep: 7)
-            }
-
-            StrataLog.safety.notice("Migration succeeded for \(storeURL.lastPathComponent, privacy: .public)")
-            return container
-
         } catch {
+            // Migration itself failed — roll back to the pre-migration backup.
             if safety == .backupAndRollback, let backup {
-                StrataLog.safety.error("Migration failed; attempting rollback from \(backup.path, privacy: .public)")
+                StrataLog.safety.error("Migration failed; rolling back from \(backup.path, privacy: .public)")
                 try BackupManager(storeURL: storeURL).restore(from: backup)
             }
-            throw MigrationError.migrationFailed(
-                underlying: error,
-                backupAvailableAt: backup
-            )
+            throw MigrationError.migrationFailed(underlying: error, backupAvailableAt: backup)
         }
+
+        // 6. Determine whether migration actually ran by comparing the schema
+        //    version. If the store was already at the correct version, remove
+        //    the backup we made — no point accumulating one per launch.
+        let schemaVersionAfter = SQLiteStoreBackup.readSchemaVersion(at: storeURL)
+        let migrationRan = schemaVersionBefore == nil || schemaVersionBefore != schemaVersionAfter
+
+        if let backup {
+            if migrationRan {
+                StrataLog.safety.notice("Migration succeeded for \(storeURL.lastPathComponent, privacy: .public)")
+                BackupManager(storeURL: storeURL).pruneOlderThan(daysToKeep: 7)
+            } else {
+                // No migration ran — the store was already current. Discard the
+                // tentative backup so we don't accumulate one per launch.
+                try? FileManager.default.removeItem(at: backup)
+                StrataLog.safety.notice("No migration needed for \(storeURL.lastPathComponent, privacy: .public); tentative backup discarded")
+            }
+        }
+
+        // 7. Post-migration hook. Runs AFTER the rollback window has closed.
+        //    A failure here does NOT trigger store rollback — the migration
+        //    already succeeded and the store is consistent. Throw a distinct
+        //    error so callers can handle hook failures separately.
+        if let post = plan.postMigration {
+            let ctx = MigrationPlan.HookContext(
+                storeURL: storeURL,
+                sourceVersion: plan.stages.first.map { String(describing: $0.fromSchema) } ?? "?",
+                destinationVersion: plan.stages.last.map { String(describing: $0.toSchema) } ?? "?"
+            )
+            do {
+                try post(ctx)
+            } catch {
+                StrataLog.safety.error("postMigration hook failed (migration succeeded): \(error, privacy: .public)")
+                throw MigrationError.postMigrationHookFailed(
+                    underlying: error,
+                    backupAvailableAt: migrationRan ? backup : nil
+                )
+            }
+        }
+
+        return container
     }
 
     /// Run a plan in "dry-run" mode: take a backup, copy the store into a
@@ -145,6 +174,9 @@ public enum SafeModelContainer {
             let tmpDir = FileManager.default.temporaryDirectory
                 .appending(path: "strata-dryrun-\(UUID().uuidString)", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+            // Always clean up the temp directory — success or failure.
+            defer { try? FileManager.default.removeItem(at: tmpDir) }
+
             let copyURL = tmpDir.appending(path: storeURL.lastPathComponent)
 
             // Use the SQLite online backup API for a WAL-consistent copy.
@@ -158,7 +190,6 @@ public enum SafeModelContainer {
                 storeURL: copyURL,
                 safety: .none
             )
-            try? FileManager.default.removeItem(at: tmpDir)
             return .success
         } catch let error as MigrationError {
             return .failure(error)

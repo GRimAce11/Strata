@@ -29,6 +29,29 @@ package enum SQLiteStoreBackup {
         }
     }
 
+    /// Read the `Z_VERSION` integer from `Z_METADATA`.
+    ///
+    /// SwiftData increments this value when a migration changes the store's
+    /// schema. Comparing the value before and after `ModelContainer` init
+    /// tells us whether migration actually ran — without which we'd back up
+    /// the store on every launch, even when no migration is needed.
+    ///
+    /// Returns `nil` if the file doesn't exist, can't be opened, or has no
+    /// `Z_METADATA` table (e.g. a freshly-created, not-yet-opened store).
+    package static func readSchemaVersion(at url: URL) -> Int? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
+              let db else { sqlite3_close(db); return nil }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        let sql = "SELECT Z_VERSION FROM Z_METADATA LIMIT 1"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return Int(sqlite3_column_int(stmt, 0))
+    }
+
     /// Copy the committed state of `source` into `destination` atomically.
     ///
     /// - Parameters:

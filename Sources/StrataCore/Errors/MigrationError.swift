@@ -59,6 +59,12 @@ public enum MigrationError: Error, Sendable, CustomStringConvertible {
     /// repair, only surface.
     case storeUnreadable(path: URL, underlying: any Error)
 
+    /// The `postMigration` hook threw after a successful migration.
+    /// The migration completed and the store is in a consistent state;
+    /// only the hook's side-effects (e.g. analytics) failed.
+    /// The backup is preserved at `backupAvailableAt` if one was made.
+    case postMigrationHookFailed(underlying: any Error, backupAvailableAt: URL?)
+
     public var description: String {
         switch self {
         case .renameStashMissing(let model, let property):
@@ -90,6 +96,9 @@ public enum MigrationError: Error, Sendable, CustomStringConvertible {
             return "Schema drift detected:\n - " + reasons.joined(separator: "\n - ")
         case .storeUnreadable(let path, let err):
             return "Store unreadable at \(path.path): \(err)"
+        case .postMigrationHookFailed(let err, let backup):
+            let suffix = backup.map { " (backup at: \($0.path))" } ?? ""
+            return "postMigration hook failed (migration itself succeeded): \(err)\(suffix)"
         }
     }
 }

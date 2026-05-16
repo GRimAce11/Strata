@@ -22,7 +22,16 @@ package struct BackupManager {
             .appending(path: ".strata-backups", directoryHint: .isDirectory)
     }
 
-    package func makeBackup() throws -> URL {
+    /// Create a backup and return its directory URL, or `nil` if the store
+    /// does not yet exist (first launch — nothing to back up).
+    package func makeBackup() throws -> URL? {
+        // On first install the store file hasn't been created yet. There is
+        // nothing to back up, and trying would throw SQLITE_CANTOPEN.
+        guard FileManager.default.fileExists(atPath: storeURL.path) else {
+            StrataLog.safety.notice("Skipping backup — no store at \(storeURL.lastPathComponent, privacy: .public) (first launch)")
+            return nil
+        }
+
         try FileManager.default.createDirectory(
             at: backupRoot, withIntermediateDirectories: true
         )
