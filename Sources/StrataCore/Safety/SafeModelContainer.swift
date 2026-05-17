@@ -95,6 +95,17 @@ public enum SafeModelContainer {
         let appleStages = SchemaMigrationPlanFactory.stages(for: plan)
         let primary = ModelConfiguration(schema: schema, url: storeURL)
 
+        // Strip any caller-supplied configuration whose URL matches storeURL.
+        // Passing two configurations for the same store causes undefined
+        // behaviour in SwiftData. Log a warning so the caller knows.
+        let extraConfigurations = configurations.filter { $0.url != storeURL }
+        if extraConfigurations.count != configurations.count {
+            let dropped = configurations.count - extraConfigurations.count
+            StrataLog.safety.warning(
+                "Strata: dropped \(dropped, privacy: .public) configuration(s) whose URL matched storeURL — the primary store configuration is added automatically."
+            )
+        }
+
         let container: ModelContainer
         do {
             container = try _StrataAppleBridge.shared.install(
@@ -104,7 +115,7 @@ public enum SafeModelContainer {
                 try ModelContainer(
                     for: schema,
                     migrationPlan: _StrataAppleBridgePlan.self,
-                    configurations: [primary] + configurations
+                    configurations: [primary] + extraConfigurations
                 )
             }
         } catch {

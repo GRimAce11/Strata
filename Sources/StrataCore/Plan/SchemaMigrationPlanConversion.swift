@@ -79,7 +79,13 @@ package enum SchemaMigrationPlanFactory {
 /// Mutable per-process slot read by ``_StrataAppleBridgePlan``.
 package final class _StrataAppleBridge: @unchecked Sendable {
     package static let shared = _StrataAppleBridge()
-    private let lock = NSLock()
+
+    // NSRecursiveLock (not NSLock): install() holds the lock for the entire
+    // duration of ModelContainer init. SwiftData reads currentSchemas() and
+    // currentStages() synchronously from within that init — i.e. from the same
+    // thread that already holds the lock. A plain NSLock would deadlock here;
+    // NSRecursiveLock allows the same thread to re-acquire it safely.
+    private let lock = NSRecursiveLock()
     private var slot: (schemas: [any VersionedSchema.Type], stages: [MigrationStage])?
 
     private init() {}
@@ -106,12 +112,14 @@ package final class _StrataAppleBridge: @unchecked Sendable {
     /// plan outside of `install(...)`'s scope, which is undefined behavior
     /// from Strata's perspective.
     package func currentSchemas() -> [any VersionedSchema.Type] {
-        slot?.schemas ?? []
+        lock.lock(); defer { lock.unlock() }
+        return slot?.schemas ?? []
     }
 
     /// Read the currently-installed stages.
     package func currentStages() -> [MigrationStage] {
-        slot?.stages ?? []
+        lock.lock(); defer { lock.unlock() }
+        return slot?.stages ?? []
     }
 }
 

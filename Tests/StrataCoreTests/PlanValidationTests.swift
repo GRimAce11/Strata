@@ -32,6 +32,20 @@ final class PlanValidationTests: XCTestCase {
         )
     }
 
+    func test_plan_detects_schema_gap_in_stage_chain() {
+        // Stage goes V1 → V3 directly, skipping V2 which is in schemas.
+        let plan = MigrationPlan(schemas: [
+            PostsSchemaV1.self, PostsSchemaV2.self, PostsSchemaV3.self,
+        ]) {
+            Stage(from: PostsSchemaV1.self, to: PostsSchemaV3.self)
+        }
+        let reasons = plan.validate()
+        XCTAssertTrue(
+            reasons.contains { $0.contains("gap") || $0.contains("Schema gap") },
+            "Expected a schema-gap validation error; got \(reasons)"
+        )
+    }
+
     func test_plan_detects_non_adjacent_stages() {
         // V1 → V2 followed by V3 → V4 leaves V2 → V3 unspecified.
         let plan = MigrationPlan(schemas: [

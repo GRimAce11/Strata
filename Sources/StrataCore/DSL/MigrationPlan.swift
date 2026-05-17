@@ -66,7 +66,9 @@ public struct MigrationPlan: Sendable {
             reasons.append("Plan has no stages.")
         }
 
-        let knownNames = Set(schemas.map { String(describing: $0) })
+        let declaredNames = schemas.map { String(describing: $0) }
+        let knownNames = Set(declaredNames)
+
         for (i, stage) in stages.enumerated() {
             let fromName = String(describing: stage.fromSchema)
             let toName = String(describing: stage.toSchema)
@@ -86,6 +88,46 @@ public struct MigrationPlan: Sendable {
                 reasons.append("Stage \(i)→\(i + 1) gap: \(lhsTo) is not the source of the next stage (\(rhsFrom)).")
             }
         }
+
+        // Contiguous chain: the sequence of schemas visited by the stages must
+        // match a contiguous block of the declared schemas list with no gaps.
+        // e.g. stages V1→V3 when schemas declares [V1, V2, V3] is rejected
+        // because V2 is skipped — it may have data that needs migrating.
+        if !stages.isEmpty {
+            var chainNames: [String] = []
+            var seen = Set<String>()
+            for stage in stages {
+                for name in [String(describing: stage.fromSchema),
+                             String(describing: stage.toSchema)] {
+                    if seen.insert(name).inserted { chainNames.append(name) }
+                }
+            }
+            // Find where the chain starts in the declared list
+            if let startIdx = declaredNames.firstIndex(of: chainNames[0]) {
+                let slice = declaredNames[startIdx...]
+                for (offset, chainName) in chainNames.enumerated() {
+                    let declaredIdx = startIdx + offset
+                    if declaredIdx >= declaredNames.count {
+                        reasons.append(
+                            "Stage chain references '\(chainName)' but plan.schemas has only " +
+                            "\(declaredNames.count) entries."
+                        )
+                        break
+                    }
+                    let expected = declaredNames[declaredIdx]
+                    if chainName != expected {
+                        reasons.append(
+                            "Schema gap at position \(declaredIdx): stage chain has " +
+                            "'\(chainName)' but plan.schemas[\(declaredIdx)] is '\(expected)'. " +
+                            "All schemas between the first and last stage must be covered."
+                        )
+                        break
+                    }
+                }
+                _ = slice  // suppress unused-variable warning
+            }
+        }
+
         return reasons
     }
 }
