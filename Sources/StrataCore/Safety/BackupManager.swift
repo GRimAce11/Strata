@@ -47,7 +47,14 @@ package struct BackupManager {
             StrataLog.safety.notice("Backup created at \(dir.path, privacy: .public)")
             return dir
         } catch {
+            // Clean up the failed backup subdirectory.
             try? FileManager.default.removeItem(at: dir)
+            // If backupRoot is now empty (only entry was this failed backup),
+            // remove it too so we don't leave a stray .strata-backups/ directory.
+            if let remaining = try? FileManager.default.contentsOfDirectory(atPath: backupRoot.path),
+               remaining.isEmpty {
+                try? FileManager.default.removeItem(at: backupRoot)
+            }
             throw MigrationError.backupFailed(underlying: error, path: storeURL)
         }
     }
@@ -86,6 +93,7 @@ package struct BackupManager {
             // modified in place, so modification date can drift on APFS.
             let values = try? entry.resourceValues(forKeys: [.creationDateKey])
             if let created = values?.creationDate, created < cutoff {
+                StrataLog.safety.notice("Pruning backup: \(entry.lastPathComponent, privacy: .public) (age: \(Int(-created.timeIntervalSinceNow / 86_400), privacy: .public) days)")
                 try? FileManager.default.removeItem(at: entry)
             }
         }

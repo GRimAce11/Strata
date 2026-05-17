@@ -74,17 +74,23 @@ public enum SafeModelContainer {
             backup = nil
         }
 
-        // 3. Snapshot the store's schema version so we can tell after the
-        //    ModelContainer init whether migration actually ran. If it didn't,
-        //    we discard the backup rather than accumulating one per launch.
+        // 3. Snapshot the store's schema version (Z_VERSION integer) to detect
+        //    whether migration runs, AND read the human-readable version identifier
+        //    from Z_PLIST so HookContext.sourceVersion reflects the store's actual
+        //    current schema rather than always showing the plan's first stage.
         let schemaVersionBefore = SQLiteStoreBackup.readSchemaVersion(at: storeURL)
+        let sourceVersion: String = {
+            let ids = SQLiteStoreBackup.readModelVersionIdentifiers(at: storeURL)
+            return ids?.first ?? plan.stages.first.map { String(describing: $0.fromSchema) } ?? "?"
+        }()
+        let destinationVersion = plan.stages.last.map { String(describing: $0.toSchema) } ?? "?"
 
         // 4. Pre-migration hook.
         if let pre = plan.preMigration {
             let ctx = MigrationPlan.HookContext(
                 storeURL: storeURL,
-                sourceVersion: plan.stages.first.map { String(describing: $0.fromSchema) } ?? "?",
-                destinationVersion: plan.stages.last.map { String(describing: $0.toSchema) } ?? "?"
+                sourceVersion: sourceVersion,
+                destinationVersion: destinationVersion
             )
             try pre(ctx)
         }
@@ -152,8 +158,8 @@ public enum SafeModelContainer {
         if let post = plan.postMigration {
             let ctx = MigrationPlan.HookContext(
                 storeURL: storeURL,
-                sourceVersion: plan.stages.first.map { String(describing: $0.fromSchema) } ?? "?",
-                destinationVersion: plan.stages.last.map { String(describing: $0.toSchema) } ?? "?"
+                sourceVersion: sourceVersion,
+                destinationVersion: destinationVersion
             )
             do {
                 try post(ctx)

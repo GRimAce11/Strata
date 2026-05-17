@@ -52,6 +52,39 @@ package enum SQLiteStoreBackup {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
+    /// Read the `NSStoreModelVersionIdentifiers` array from the binary plist
+    /// stored in `Z_METADATA.Z_PLIST`.
+    ///
+    /// SwiftData writes the current schema's `VersionedSchema.versionIdentifier`
+    /// string(s) here. This gives us the store's actual "current schema version"
+    /// for the `HookContext.sourceVersion` field — far more meaningful than
+    /// the plan's first-stage schema name, which is often many versions behind
+    /// the store's real state.
+    ///
+    /// Returns `nil` if the store can't be opened, has no `Z_METADATA`, or the
+    /// plist is missing or malformed.
+    package static func readModelVersionIdentifiers(at url: URL) -> [String]? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
+              let db else { sqlite3_close(db); return nil }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT Z_PLIST FROM Z_METADATA LIMIT 1", -1, &stmt, nil) == SQLITE_OK,
+              let stmt else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        let byteCount = sqlite3_column_bytes(stmt, 0)
+        guard byteCount > 0, let rawPtr = sqlite3_column_blob(stmt, 0) else { return nil }
+        let data = Data(bytes: rawPtr, count: Int(byteCount))
+
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let dict = plist as? [String: Any],
+              let identifiers = dict["NSStoreModelVersionIdentifiers"] as? [String] else { return nil }
+        return identifiers.filter { !$0.isEmpty }
+    }
+
     /// Copy the committed state of `source` into `destination` atomically.
     ///
     /// - Parameters:

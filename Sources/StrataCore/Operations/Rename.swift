@@ -183,22 +183,27 @@ public struct Rename<
 
     // MARK: - Row-identity key extraction (default init only)
 
-    /// Build a stable string key for `id` using the documented `Codable`
-    /// conformance of `PersistentIdentifier` (iOS 17+ / macOS 14+).
-    /// The JSON includes the entity name and store-local primary key —
-    /// both stable across the willMigrate/didMigrate boundary for a given row.
+    /// Build a stable string key for a `PersistentIdentifier` that survives
+    /// the willMigrate → didMigrate schema transition.
+    ///
+    /// ## Why `id.id` and not `JSONEncoder().encode(id)` or `String(describing: id)`
+    ///
+    /// `PersistentIdentifier` conforms to `Identifiable` with `ID = Self`,
+    /// so `id.id` is the identifier itself. `String(describing: id)` and
+    /// `String(describing: id.id)` are therefore the same expression.
+    ///
+    /// The key insight is that `String(describing:)` on a `PersistentIdentifier`
+    /// includes the Core Data URI fragment `x-coredata://UUID/EntityName/pN`.
+    /// That URI contains the **unqualified** class name ("Post", not
+    /// "PostsSchemaV2.Post") and the SQLite `Z_PK` integer (`p3`), both of
+    /// which are stable across the schema migration boundary for the same row.
+    ///
+    /// By contrast, `JSONEncoder().encode(id)` serialises schema-version
+    /// metadata that changes between the source and destination schemas —
+    /// confirmed by empirical testing where the encoded bytes differed even
+    /// for the same underlying row after migration.
     private static func persistentKey(for id: PersistentIdentifier) -> String {
-        // IMPORTANT: Do NOT use JSONEncoder().encode(id) or String(describing: id).
-        // The outer PersistentIdentifier embeds schema-version metadata that
-        // changes between willMigrate (source schema) and didMigrate (destination
-        // schema), making those representations unstable as stash keys.
-        //
-        // id.id is the inner PersistentIdentifier.ID wrapping NSManagedObjectID.
-        // Its description contains the Core Data URI:
-        //   ...(x-coredata://UUID/EntityName/pN)
-        // where EntityName is the unqualified class name and pN is the SQLite
-        // Z_PK. Both survive the schema transition unchanged.
-        let inner = String(describing: id.id)
+        let inner = String(describing: id.id)  // same as String(describing: id)
 
         // Scan for /p<digits> — the Z_PK segment in the URI.
         if let slashP = inner.range(of: "/p") {

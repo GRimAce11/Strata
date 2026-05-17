@@ -14,6 +14,15 @@ internal import XCTest
 /// Snapshot files live under a `__Snapshots__` directory next to the
 /// test source file. The on-disk format is a stable, sorted JSON
 /// document so diffs are reviewable in code review.
+///
+/// ## Stability guarantees
+///
+/// - `Date` values are serialized as ISO 8601 UTC strings.
+/// - `UUID` values are serialized as uppercase hyphenated strings.
+/// - `URL` values are serialized as absolute strings.
+/// - Relationship properties (other `PersistentModel` instances) are
+///   omitted — their persistent IDs change between test runs.
+/// - All other scalar values use `String(describing:)`.
 public func assertMigrationSnapshot<S: VersionedSchema>(
     fixture fixtureURL: URL,
     through finalSchema: S.Type,
@@ -69,12 +78,11 @@ public func assertMigrationSnapshot<S: VersionedSchema>(
 /// Walk every model in the schema, fetch all entities, and emit a
 /// deterministic JSON document.
 ///
-/// Determinism notes:
+/// Determinism guarantees:
 /// - Models are sorted by name.
-/// - Entities within each model are sorted by their string-form
-///   persistent identifier so re-runs produce identical bytes.
-/// - The JSON encoder is configured with `.sortedKeys` and
-///   `.prettyPrinted` for human-reviewable diffs.
+/// - Entities are sorted by their stable persistent key (entity name + Z_PK).
+/// - Date, UUID, and URL values use stable formatters.
+/// - Relationship properties are omitted.
 private func snapshotJSON<S: VersionedSchema>(
     from context: ModelContext,
     schema: S.Type
@@ -101,14 +109,61 @@ private func fetchAndSerialize<T: PersistentModel>(
     in context: ModelContext
 ) throws -> [SnapshotRow] {
     let objects = try context.fetch(FetchDescriptor<T>())
+    let dateFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
     return objects.map { obj in
         var fields: [String: String] = [:]
         for child in Mirror(reflecting: obj).children {
             guard let label = child.label, !label.hasPrefix("_") else { continue }
-            fields[label] = String(describing: child.value)
+            // Serialize with stable, OS-version-independent formatters.
+            // stableValue returns nil for relationship properties (class instances)
+            // which are omitted from the snapshot — their identifiers change
+            // between test runs and cross-entity ordering is unpredictable.
+            if let value = stableValue(child.value, dateFormatter: dateFormatter) {
+                fields[label] = value
+            }
         }
-        return SnapshotRow(id: "\(obj.persistentModelID)", fields: fields)
+        return SnapshotRow(
+            id: stablePersistentKey(obj.persistentModelID),
+            fields: fields
+        )
     }
+}
+
+/// Serialize `value` to a stable, OS-independent string.
+/// Returns `nil` for class-type values (PersistentModel relationships).
+private func stableValue(_ value: Any, dateFormatter: ISO8601DateFormatter) -> String? {
+    // Stable formatters for types whose String(describing:) varies by OS/locale.
+    if let date = value as? Date { return dateFormatter.string(from: date) }
+    if let uuid = value as? UUID { return uuid.uuidString }
+    if let url  = value as? URL  { return url.absoluteString }
+
+    // Unwrap Optional recursively.
+    let mirror = Mirror(reflecting: value)
+    if mirror.displayStyle == .optional {
+        guard let child = mirror.children.first else { return "nil" }
+        return stableValue(child.value, dateFormatter: dateFormatter)
+    }
+
+    // Class-type values are PersistentModel relationships — skip them.
+    if mirror.displayStyle == .class { return nil }
+
+    return String(describing: value)
+}
+
+/// Derive a stable sort key from a `PersistentIdentifier`.
+/// Uses entity name + SQLite Z_PK extracted from the identifier description,
+/// giving a consistent ordering across OS versions.
+private func stablePersistentKey(_ id: PersistentIdentifier) -> String {
+    let desc = String(describing: id.id)
+    if let slashP = desc.range(of: "/p") {
+        let digits = desc[slashP.upperBound...].prefix(while: \.isNumber)
+        if !digits.isEmpty { return "\(id.entityName)/\(digits)" }
+    }
+    return String(describing: id)
 }
 
 private struct SnapshotRow: Codable, Comparable {
