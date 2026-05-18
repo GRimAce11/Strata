@@ -406,11 +406,14 @@ destructive false positives; in Strata renames are always user-declared via
 ### `strata` CLI
 
 ```bash
-# Report tables and columns in an on-disk store (Milestone 3)
+# Report tables and columns in an on-disk store
 strata inspect MyApp.store
 
-# Schema drift between declared and on-disk (Milestone 3)
+# Schema drift between declared and on-disk
 strata drift MyApp.store
+
+# Structural diff between two store files
+strata store-diff OldApp.store NewApp.store
 ```
 
 ## Architecture
@@ -418,8 +421,8 @@ strata drift MyApp.store
 ```
 StrataCore        — DSL types, operations, SafeModelContainer, backup/rollback
 StrataTesting     — MigrationTestCase, fixture/migrate helpers, snapshot assertions
-StrataInspect     — SchemaDiff, MigrationReport, StoreIntrospector (M3 scaffolded)
-StrataCLI         — strata binary; inspect / diff / drift subcommands
+StrataInspect     — SchemaDiff, MigrationReport, StoreIntrospector (full SQLite backend)
+StrataCLI         — strata binary; inspect / diff / drift / store-diff subcommands
 ```
 
 Module boundaries are strict: `StrataCore` has no dependency on `StrataTesting`
@@ -485,13 +488,13 @@ to load your `@Model` types at runtime.
 - [x] Benchmark + seed helpers in `StrataTesting`
 - [x] `SchemaDiff.diff(from:to:)` — declared-schema diff
 - [x] `MigrationReport.render` — human-readable diff and plan rendering
-- [x] `strata` CLI binary with inspect / diff / drift subcommands
-- [x] 13 integration tests against real SwiftData stores on disk
+- [x] `strata` CLI binary with inspect / diff / drift / store-diff subcommands
+- [x] Integration tests against real SwiftData stores on disk
 - [x] `StoreIntrospector` — SQLite backend for on-disk schema reading
-- [x] `strata inspect` / `strata drift` fully functional
+- [x] `strata inspect` / `strata drift` / `strata store-diff` fully functional
+- [x] `HookContext.sourceVersion` reads real schema version from store metadata
 - [ ] CloudKit-synced store support
 - [ ] `@CapturableObservable` macro for capturing `@Observable` view-model state in `StrataTesting`
-- [ ] Schema version metadata in store (strata inspect can report current version)
 
 ## Examples
 

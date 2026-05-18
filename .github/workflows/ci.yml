@@ -57,18 +57,19 @@ jobs:
 
       - name: Build library targets for iOS Simulator
         run: |
+          set -eo pipefail
           xcodebuild build \
             -scheme Strata \
             -destination 'generic/platform=iOS Simulator' \
-            -skipPackagePluginValidation \
-            | xcpretty || cat
+            -skipPackagePluginValidation
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
       - name: Test on iOS Simulator
         run: |
-          # Pick the latest available iPhone simulator
-          SIM=$(xcrun simctl list devices available --json \
+          set -eo pipefail
+          # Pick the latest available iPhone simulator (-json is the simctl flag)
+          SIM=$(xcrun simctl list devices available -json \
             | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -85,8 +86,7 @@ if iphones: print(iphones[0][1]['udid'])
             -skipPackagePluginValidation \
             -only-testing:StrataCoreTests \
             -only-testing:StrataTestingTests \
-            -only-testing:StrataInspectTests \
-            | xcpretty || cat
+            -only-testing:StrataInspectTests
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
