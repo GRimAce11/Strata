@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-19
+
+### Added
+
+- **`CustomOperation` phase control** — both `init` overloads now accept
+  `phase: MigrationPhase = .body`. Pass `.captures` to run before `Rename`
+  stashes values, or `.assertions` to run as a post-condition check.
+- **`HookContext.sourceVersion` from real store metadata** — reads
+  `NSStoreModelVersionIdentifiers` from `Z_METADATA.Z_PLIST` so hook
+  callbacks receive the store's actual current schema version (e.g.
+  `"1.0.0"`) instead of always showing the plan's first-stage type name.
+- **`SQLiteStoreBackup.readModelVersionIdentifiers(at:)`** — package-internal
+  helper that parses the binary plist in `Z_METADATA.Z_PLIST` via
+  `PropertyListSerialization` to extract the stored schema version identifiers.
+
+### Fixed
+
+- **`_StrataAppleBridge` data race** — `currentSchemas()` and
+  `currentStages()` previously read `slot` without holding the lock.
+  Switched from `NSLock` to `NSRecursiveLock` (required because SwiftData
+  calls these properties synchronously from within the `ModelContainer` init
+  that runs while the lock is already held on the same thread — a plain
+  `NSLock` would deadlock).
+- **Schema chain gap detection** — `MigrationPlan.validate()` now rejects
+  plans where the stage chain skips a declared schema (e.g.
+  `Stage(from: V1, to: V3)` when `schemas` declares `[V1, V2, V3]`).
+  Previously this passed validation and V2 was silently never migrated.
+- **Duplicate `ModelConfiguration` footgun** — `SafeModelContainer.make`
+  now filters out any caller-supplied configuration whose URL matches
+  `storeURL` before passing the list to `ModelContainer`. Passing two
+  configurations for the same store caused undefined SwiftData behaviour;
+  the duplicate is now discarded with a `.warning` log.
+- **`SnapshotAssertion` OS-stability** — snapshot serialization now uses
+  `ISO8601DateFormatter` (UTC) for `Date`, `.uuidString` for `UUID`, and
+  `.absoluteString` for `URL`. Relationship properties (class-type Mirror
+  children) are omitted rather than serialized as unstable object
+  descriptions containing memory addresses. Row sort keys use the stable
+  `entityName/Z_PK` extraction rather than `PersistentIdentifier`'s
+  OS-version-dependent description.
+- **Backup pruning now logged** — `BackupManager.pruneOlderThan` emits a
+  `.notice` log entry (name + age in days) for each backup directory
+  removed. Previously silent.
+- **Orphaned `.strata-backups` parent cleaned up** — when a backup fails
+  and the timestamped subdirectory is removed, `makeBackup` now also removes
+  the `.strata-backups` parent if it is left empty. Prevents a stray
+  directory being left after a first-launch backup failure.
+- **`Rename.persistentKey` comment corrected** — the comment incorrectly
+  stated that `id.id` accesses an "inner NSManagedObjectID wrapper".
+  `PersistentIdentifier` conforms to `Identifiable` with `ID = Self`, so
+  `id.id == id`. The comment now accurately documents why
+  `String(describing: id)` is stable across migrations (it contains the Core
+  Data URI with the unqualified class name and Z_PK), and why
+  `JSONEncoder().encode(id)` is not (confirmed to embed schema-version
+  metadata that changes across the boundary).
+
+### Changed
+
+- `MigrationPlan.validate()` is stricter: a stage chain that skips a
+  declared intermediate schema now returns a validation error.
+- `SafeModelContainer.make` silently removes duplicate configurations rather
+  than forwarding them to SwiftData. A `.warning` log is emitted when a
+  duplicate is detected.
+
 ## [0.2.0] — 2026-05-19
 
 ### Added
@@ -177,6 +240,7 @@ introspection has a stable protocol seam but is not yet implemented).
 - CloudKit-synced stores are not yet supported.
 - `StoreIntrospector`'s SQLite backend is not yet implemented.
 
-[Unreleased]: https://github.com/GRimAce11/Strata/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/GRimAce11/Strata/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/GRimAce11/Strata/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/GRimAce11/Strata/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/GRimAce11/Strata/releases/tag/0.1.0
