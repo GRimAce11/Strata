@@ -8,9 +8,10 @@
 
 <p align="center">
   <a href="https://github.com/GRimAce11/Strata/actions/workflows/ci.yml"><img src="https://github.com/GRimAce11/Strata/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://swiftpackageindex.com/GRimAce11/Strata"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FGRimAce11%2FStrata%2Fbadge%3Ftype%3Dswift-versions" alt="Swift versions"></a>
-  <a href="https://swiftpackageindex.com/GRimAce11/Strata"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FGRimAce11%2FStrata%2Fbadge%3Ftype%3Dplatforms" alt="Platforms"></a>
-  <a href="https://github.com/GRimAce11/Strata/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GRimAce11/Strata" alt="License"></a>
+  <img src="https://img.shields.io/badge/Swift-6.0%2B-orange?logo=swift&logoColor=white" alt="Swift 6.0+">
+  <img src="https://img.shields.io/badge/Platforms-iOS%2017%20%7C%20macOS%2014%20%7C%20watchOS%2010%20%7C%20tvOS%2017%20%7C%20visionOS%201-blue" alt="Platforms">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License: MIT">
+  <a href="https://swiftpackageindex.com/GRimAce11/Strata"><img src="https://img.shields.io/badge/Swift%20Package%20Index-Strata-informational" alt="Swift Package Index"></a>
 </p>
 
 ---

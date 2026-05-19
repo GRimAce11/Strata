@@ -65,6 +65,14 @@ Every new operation needs at least one integration test that:
 Use `PostsSchemaV1`…`V4` from `PostsDemo` rather than inventing new
 test-only schemas unless the new behavior genuinely doesn't fit.
 
+## Releasing
+
+1. Update `CHANGELOG.md` — move items from `[Unreleased]` into a new version section with today's date.
+2. Bump the version reference in `README.md` installation snippet if needed.
+3. Commit: `git commit -m "chore: release x.y.z"`.
+4. Tag: `git tag -a x.y.z -m "x.y.z"` and `git push origin x.y.z`.
+5. Draft a GitHub release pointing at the tag and copy the CHANGELOG section as the body.
+
 ## Reporting bugs
 
 File on the issue tracker with:
