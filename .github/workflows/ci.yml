@@ -58,12 +58,18 @@ jobs:
       - name: Build library targets for iOS Simulator
         run: |
           set -eo pipefail
-          xcodebuild build \
-            -scheme Strata-Package \
-            -destination 'generic/platform=iOS Simulator' \
-            -skipPackagePluginValidation \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+          # Build library schemes individually — Strata-Package includes the
+          # strata CLI executable which has no entry point on iOS (the whole
+          # file is #if os(macOS)) and fails to link on iOS Simulator.
+          for scheme in StrataCore StrataTesting StrataInspect; do
+            echo "Building $scheme..."
+            xcodebuild build \
+              -scheme "$scheme" \
+              -destination 'generic/platform=iOS Simulator' \
+              -skipPackagePluginValidation \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO
+          done
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
