@@ -60,8 +60,33 @@ public struct Rename<
     private let sourceKeyExtractor: (From) -> String
     private let destKeyExtractor: (To) -> String
 
-    // MARK: - Init: automatic identity (PersistentIdentifier-derived)
+    // MARK: - Init: explicit identity keys (PREFERRED)
 
+    // MARK: - Init: automatic identity (PersistentIdentifier-derived, DEPRECATED)
+
+    /// - Warning: Deprecated. This overload parses undocumented
+    ///   `PersistentIdentifier` internals and silently drops data when the
+    ///   `@Model` class name differs between the source and destination schema
+    ///   versions — a common occurrence when restructuring models.
+    ///
+    ///   **Use `sourceKey:destinationKey:` instead:**
+    ///   ```swift
+    ///   // Before (risky — may silently lose data):
+    ///   Rename(\PostV2.body, to: \PostV3.content)
+    ///
+    ///   // After (safe — deterministic, user-controlled identity):
+    ///   Rename(\PostV2.body, to: \PostV3.content,
+    ///          sourceKey: \PostV2.id, destinationKey: \PostV3.id)
+    ///   ```
+    @available(*, deprecated, renamed: "init(_:to:sourceKey:destinationKey:)", message: """
+        Rename's default identity mapping parses undocumented PersistentIdentifier \
+        internals and silently drops data when the @Model class name changes \
+        between schema versions. \
+        Supply sourceKey: and destinationKey: with a stable user-defined property \
+        (e.g., an id: UUID or id: String that is identical in both schema versions):
+            Rename(\\PostV2.body, to: \\PostV3.content,
+                   sourceKey: \\PostV2.id, destinationKey: \\PostV3.id)
+        """)
     public init(
         _ fromKeyPath: KeyPath<From, Value>,
         to toKeyPath: ReferenceWritableKeyPath<To, Value>
@@ -69,7 +94,8 @@ public struct Rename<
         self.fromKeyPath = fromKeyPath
         self.toKeyPath = toKeyPath
         self.description = "Rename \(From.self).\(_strataPropertyName(fromKeyPath)) → " +
-                           "\(To.self).\(_strataPropertyName(toKeyPath))"
+                           "\(To.self).\(_strataPropertyName(toKeyPath)) " +
+                           "[deprecated: PersistentIdentifier identity]"
         self.sourceKeyExtractor = { Self.persistentKey(for: $0.persistentModelID) }
         self.destKeyExtractor   = { Self.persistentKey(for: $0.persistentModelID) }
     }

@@ -25,10 +25,14 @@ public enum PostsMigrationPlan {
         Stage(from: PostsSchemaV1.self, to: PostsSchemaV2.self)
 
         // V2 → V3: rename `body` → `content`, then attach an Author.
+        // sourceKey:/destinationKey: uses the stable user-defined `id` field
+        // for row identity — safe even when the @Model class name changes.
         Stage(from: PostsSchemaV2.self, to: PostsSchemaV3.self) {
             Rename(
                 \PostsSchemaV2.Post.body,
-                to: \PostsSchemaV3.Post.content
+                to: \PostsSchemaV3.Post.content,
+                sourceKey: \PostsSchemaV2.Post.id,
+                destinationKey: \PostsSchemaV3.Post.id
             )
 
             CustomOperation(

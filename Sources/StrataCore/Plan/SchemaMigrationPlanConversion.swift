@@ -77,40 +77,45 @@ package enum SchemaMigrationPlanFactory {
 // MARK: - Static bridge
 
 /// Mutable per-process slot read by ``_StrataAppleBridgePlan``.
+///
+/// ## Thread-safety model
+///
+/// **Writes** (`setSlot` / `clearSlot`) are serialized by ``MigrationRuntime``
+/// — the actor guarantees only one migration can call `setSlot` at a time.
+/// Writes do not hold the lock while the `ModelContainer` init runs.
+///
+/// **Reads** (`currentSchemas` / `currentStages`) are called by SwiftData
+/// from its own internal threads during `ModelContainer` init. They use a
+/// plain `NSLock` for memory safety. No recursion is needed because `setSlot`
+/// returns before SwiftData reads — the lock is never re-entered on the same
+/// thread.
 package final class _StrataAppleBridge: @unchecked Sendable {
     package static let shared = _StrataAppleBridge()
 
-    // NSRecursiveLock (not NSLock): install() holds the lock for the entire
-    // duration of ModelContainer init. SwiftData reads currentSchemas() and
-    // currentStages() synchronously from within that init — i.e. from the same
-    // thread that already holds the lock. A plain NSLock would deadlock here;
-    // NSRecursiveLock allows the same thread to re-acquire it safely.
-    private let lock = NSRecursiveLock()
+    private let lock = NSLock()
     private var slot: (schemas: [any VersionedSchema.Type], stages: [MigrationStage])?
 
     private init() {}
 
-    /// Lock the bridge for the duration of `body`, install `schemas` and
-    /// `stages` so that ``_StrataAppleBridgePlan`` reads them, and clear
-    /// the slot when the closure returns (whether normally or via throw).
-    package func install<T>(
+    /// Install schemas and stages into the slot.
+    /// Called exclusively from ``MigrationRuntime/perform``.
+    package func setSlot(
         schemas: [any VersionedSchema.Type],
-        stages: [MigrationStage],
-        _ body: () throws -> T
-    ) rethrows -> T {
-        lock.lock()
+        stages: [MigrationStage]
+    ) {
+        lock.lock(); defer { lock.unlock() }
         slot = (schemas, stages)
-        defer {
-            slot = nil
-            lock.unlock()
-        }
-        return try body()
     }
 
-    /// Read the currently-installed schemas. Returns an empty array if no
-    /// install is active — this only happens if Apple decides to read the
-    /// plan outside of `install(...)`'s scope, which is undefined behavior
-    /// from Strata's perspective.
+    /// Clear the slot after `ModelContainer` init completes.
+    /// Called from the `defer` in ``MigrationRuntime/perform``.
+    package func clearSlot() {
+        lock.lock(); defer { lock.unlock() }
+        slot = nil
+    }
+
+    /// Read the currently-installed schemas.
+    /// Returns an empty array when no migration session is active.
     package func currentSchemas() -> [any VersionedSchema.Type] {
         lock.lock(); defer { lock.unlock() }
         return slot?.schemas ?? []
