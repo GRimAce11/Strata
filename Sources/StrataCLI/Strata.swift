@@ -1,6 +1,10 @@
-// The strata CLI is a macOS-only tool. On other Apple platforms this
-// file compiles to nothing; iOS/tvOS/watchOS/visionOS apps depend only
-// on StrataCore and never link StrataCLI.
+// The strata CLI is a macOS-only tool. iOS/tvOS/watchOS/visionOS apps
+// depend only on StrataCore and never use StrataCLI.
+//
+// The non-macOS stub below satisfies the linker when xcodebuild builds
+// the Strata-Package scheme for Apple simulator destinations in CI —
+// xcodebuild compiles all scheme targets before running -only-testing:
+// filters, so every executable must have a valid entry point.
 #if os(macOS)
 internal import ArgumentParser
 internal import Foundation
@@ -240,4 +244,7 @@ struct StoreDiff: AsyncParsableCommand {
         }
     }
 }
+#else
+// Stub entry point for non-macOS Apple platforms.
+@main struct Strata { static func main() {} }
 #endif // os(macOS)
