@@ -1,10 +1,27 @@
 version: 1
 builder:
   configs:
+    # macOS — primary development platform, builds via swift package manager
     - platform: macosSpm
-      scheme: Strata
-      swift_version: '6'
+      swift_version: "6.0"
       documentation_targets:
         - StrataCore
         - StrataTesting
         - StrataInspect
+
+    # Apple simulator platforms — verifies Xcode scheme builds for each target OS
+    - platform: ios
+      scheme: Strata
+      swift_version: "6.0"
+
+    - platform: tvos
+      scheme: Strata
+      swift_version: "6.0"
+
+    - platform: watchos
+      scheme: Strata
+      swift_version: "6.0"
+
+    - platform: visionos
+      scheme: Strata
+      swift_version: "6.0"
