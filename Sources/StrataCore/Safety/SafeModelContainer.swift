@@ -46,16 +46,27 @@ public enum SafeModelContainer {
     ///   - storeURL: Filesystem URL of the SwiftData store.
     ///   - safety: Backup/rollback behavior. Defaults to
     ///     ``Safety/backupAndRollback``.
-    ///   - configurations: Additional `ModelConfiguration` values
-    ///     passed straight through to SwiftData (e.g. for sharing or
-    ///     CloudKit). The primary configuration is constructed from
-    ///     `schema` + `storeURL`.
+    ///   - cloudKitDatabase: CloudKit database for the primary store. Pass
+    ///     `.private("iCloud.com.example.MyApp")` or `.automatic` if the
+    ///     store is iCloud-synced; omit (`nil`, the default) for a
+    ///     local-only store.
+    ///
+    ///     When non-nil, safety is automatically capped at
+    ///     ``Safety/backupOnly`` — rolling back a CloudKit store risks iCloud
+    ///     sync conflicts because schema changes may already have been
+    ///     propagated to the cloud before rollback runs. The local backup is
+    ///     still retained for manual recovery.
+    ///   - configurations: Additional `ModelConfiguration` values passed
+    ///     straight through to SwiftData (e.g. for sharing). The primary
+    ///     configuration is built from `schema`, `storeURL`, and
+    ///     `cloudKitDatabase`.
     @discardableResult
     public static func make(
         for schema: Schema,
         plan: MigrationPlan,
         storeURL: URL,
         safety: Safety = .backupAndRollback,
+        cloudKitDatabase: ModelConfiguration.CloudKitDatabase? = nil,
         configurations: [ModelConfiguration] = []
     ) async throws -> ModelContainer {
 
@@ -65,10 +76,27 @@ public enum SafeModelContainer {
             throw MigrationError.validationFailed(reasons: validationErrors)
         }
 
+        // CloudKit safety cap: rolling back a CloudKit-synced store risks
+        // sync conflicts because SwiftData may have already propagated the
+        // schema change to iCloud before the local rollback runs. Cap at
+        // .backupOnly so the backup is retained for manual recovery, but
+        // automatic store replacement is skipped.
+        // Note: Optional<CloudKitDatabase> != nil does not require Equatable.
+        let isCloudKit = cloudKitDatabase != nil
+        let effectiveSafety: Safety
+        if isCloudKit && safety == .backupAndRollback {
+            StrataLog.safety.warning(
+                "[Strata] CloudKit store detected — downgrading safety from .backupAndRollback to .backupOnly. Rolling back a CloudKit-synced store risks iCloud sync conflicts; the backup is kept if migration fails."
+            )
+            effectiveSafety = .backupOnly
+        } else {
+            effectiveSafety = safety
+        }
+
         // 2. Optional backup. makeBackup() returns nil on first launch
         //    (store doesn't exist yet) — nothing to back up.
         let backup: URL?
-        if safety != .none {
+        if effectiveSafety != .none {
             backup = try BackupManager(storeURL: storeURL).makeBackup()
         } else {
             backup = nil
@@ -99,7 +127,7 @@ public enum SafeModelContainer {
         //    a SchemaMigrationPlan-conforming TYPE, not a value, so we install
         //    the runtime stages into a static bridge for the duration of init.
         let appleStages = SchemaMigrationPlanFactory.stages(for: plan)
-        let primary = ModelConfiguration(schema: schema, url: storeURL)
+        let primary = ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: cloudKitDatabase ?? .none)
 
         // Strip any caller-supplied configuration whose URL matches storeURL.
         // Passing two configurations for the same store causes undefined
@@ -126,7 +154,7 @@ public enum SafeModelContainer {
             }
         } catch {
             // Migration itself failed — roll back to the pre-migration backup.
-            if safety == .backupAndRollback, let backup {
+            if effectiveSafety == .backupAndRollback, let backup {
                 StrataLog.safety.error("Migration failed; rolling back from \(backup.path, privacy: .public)")
                 try BackupManager(storeURL: storeURL).restore(from: backup)
             }

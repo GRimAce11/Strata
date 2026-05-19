@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CloudKit-synced store support** — `SafeModelContainer.make` now accepts a
+  `cloudKitDatabase: ModelConfiguration.CloudKitDatabase?` parameter. Pass
+  `.private("iCloud.com.example.MyApp")` or `.automatic` for CloudKit stores.
+  Safety is automatically capped at `.backupOnly` when CloudKit is enabled;
+  rolling back a CloudKit store risks iCloud sync conflicts because schema
+  changes may already have been propagated before rollback runs. The local
+  backup is still retained for manual recovery.
+- **`CapturableObservable` protocol** in `StrataTesting` — adopt this on any
+  `@Observable` view model to produce a `Sendable` snapshot of its current
+  state, enabling before/after assertions across migration boundaries.
+- **`captureProperties(of:)`** — Mirror-based helper in `StrataTesting` that
+  captures all non-underscore, non-relationship properties of any object as
+  `[String: String]`. Useful for quick one-off checks without declaring a
+  full `Snapshot` type.
+- **`assertObservableState(of:matches:)`** — XCTest assertion that compares
+  selected properties of an observable object against an expected dictionary,
+  built on `captureProperties(of:)`.
+
 ## [0.3.0] — 2026-05-19
 
 ### Added

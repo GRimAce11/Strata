@@ -366,6 +366,43 @@ try await assertMigrationSnapshot(
 
 The JSON is sorted and pretty-printed so diffs are reviewable in code review.
 
+### Observable view model assertions
+
+`CapturableObservable` lets you snapshot an `@Observable` view model before and after a migration and assert on its state.
+
+```swift
+@Observable
+final class PostListViewModel: CapturableObservable {
+    struct Snapshot: Sendable {
+        var postCount: Int
+        var titles: [String]
+    }
+
+    var posts: [Post] = []
+
+    func capture() -> Snapshot {
+        Snapshot(postCount: posts.count, titles: posts.map(\.title))
+    }
+}
+
+// In a migration test:
+let before = viewModel.capture()
+let migratedContainer = try await migrate(store: store, to: SchemaV4.self, plan: plan)
+viewModel.reload(context: ModelContext(migratedContainer))
+let after = viewModel.capture()
+XCTAssertEqual(after.postCount, before.postCount)
+```
+
+For quick one-off checks without a `Snapshot` type, use the Mirror-based helper:
+
+```swift
+// Captures all non-underscore, non-relationship properties as [String: String]
+assertObservableState(of: viewModel, matches: [
+    "postCount": "3",
+    "isLoading": "false",
+])
+```
+
 ### Performance
 
 ```swift
@@ -464,9 +501,22 @@ value bridges the two phases.
 content` is a rename. Write `Rename(\.body, to: \.content)` explicitly — it
 is one line.
 
-**CloudKit-synced stores** have their own migration semantics. Strata does not
-yet handle them; using `safety: .backupAndRollback` with a CloudKit-enabled
-configuration is untested.
+**CloudKit-synced stores** are supported with one constraint: Strata
+automatically downgrades `safety: .backupAndRollback` to `safety: .backupOnly`
+when `cloudKitDatabase` is non-nil. Rolling back a CloudKit store risks iCloud
+sync conflicts because schema changes may already have been propagated to the
+cloud before the local rollback runs. The local backup is still retained for
+manual recovery if migration fails.
+
+```swift
+let container = try await SafeModelContainer.make(
+    for: Schema(versionedSchema: SchemaV3.self),
+    plan: MyPlan.plan,
+    storeURL: storeURL,
+    cloudKitDatabase: .private("iCloud.com.example.MyApp")
+    // safety automatically capped at .backupOnly for CloudKit stores
+)
+```
 
 **`strata drift` requires a compiled schema.** The CLI can print the raw on-disk
 schema but comparing it against a declared `VersionedSchema` requires calling
@@ -494,8 +544,8 @@ to load your `@Model` types at runtime.
 - [x] `StoreIntrospector` — SQLite backend for on-disk schema reading
 - [x] `strata inspect` / `strata drift` / `strata store-diff` fully functional
 - [x] `HookContext.sourceVersion` reads real schema version from store metadata
-- [ ] CloudKit-synced store support
-- [ ] `@CapturableObservable` macro for capturing `@Observable` view-model state in `StrataTesting`
+- [x] CloudKit-synced store support — `cloudKitDatabase:` parameter, auto-downgrade to `.backupOnly`
+- [x] `CapturableObservable` protocol + `captureProperties(of:)` + `assertObservableState(of:matches:)` in `StrataTesting`
 
 ## Examples
 
