@@ -59,34 +59,42 @@ jobs:
         run: |
           set -eo pipefail
           xcodebuild build \
-            -scheme Strata \
+            -scheme Strata-Package \
             -destination 'generic/platform=iOS Simulator' \
-            -skipPackagePluginValidation
+            -skipPackagePluginValidation \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
       - name: Test on iOS Simulator
         run: |
           set -eo pipefail
-          # Pick the latest available iPhone simulator (-json is the simctl flag)
-          SIM=$(xcrun simctl list devices available -json \
+          # Pick the latest available iPhone simulator (--json is the correct simctl flag)
+          SIM=$(xcrun simctl list devices available --json \
             | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-iphones = [(k, v) for runtime, devs in d['devices'].items()
+iphones = [(runtime, v) for runtime, devs in d['devices'].items()
            for v in devs
            if 'iPhone' in v.get('name', '') and v.get('isAvailable')]
 iphones.sort(key=lambda x: x[0], reverse=True)
 if iphones: print(iphones[0][1]['udid'])
 ")
+          if [ -z "$SIM" ]; then
+            echo "::error::No available iPhone simulator found"
+            exit 1
+          fi
           echo "Simulator UDID: $SIM"
           xcodebuild test \
-            -scheme Strata \
+            -scheme Strata-Package \
             -destination "id=$SIM" \
             -skipPackagePluginValidation \
             -only-testing:StrataCoreTests \
             -only-testing:StrataTestingTests \
-            -only-testing:StrataInspectTests
+            -only-testing:StrataInspectTests \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
